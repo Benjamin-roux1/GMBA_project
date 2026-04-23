@@ -9,222 +9,100 @@
 #----------------------------------------------------------#
 # 1. 1. Set up and load the data  -----
 #----------------------------------------------------------#
-library(here)
-library(tidyverse)
-library(readxl)
-library(sf)
+library(here); library(data.table); library(dplyr)
+library(tidyverse); library(readxl); library(terra)
+library(sf); library(arrow); library(rgbif); library(gpkg)
 
-# Load configuration file
-source(here::here("R/00_Config_file.R"))
+# Load configuration
+#source(
+#here::here("R/00_Config_file.R")
+#)
 
-birds_data <- sf::st_read(paste0(data_storage_path,"subm_global_alpine_biodiversity/Data/Birds/BirdLife/BOTW.gdb"))
+# define data path OR even config.R file with libraries & path
+source_path <- "C:/Users/berou1714/OneDrive - Norwegian University of Life Sciences/Desktop/PhD_project/"
 
-# set geometry false to investigate data a bit
-birds_no_geom <- sf::st_set_geometry(birds_data, NULL)
+# source all functions
+list.files(path = paste0(source_path, "GMBA_project/Functions"), pattern = "*.R", full.names = TRUE) %>%
+  purrr::walk(source)
 
 #----------------------------------------------------------#
-# Check out data  -----
+# Load the data  -----
+#----------------------------------------------------------#
+geopac <- geopackage(paste0(source_path, "GMBA_project/Raw_datasets/Birds/species/BOTW_2025.gpkg"), connect = TRUE)
+gpkg_list_tables(geopac)
+gpkg_tbl(geopac, "all_species")
+
+
+#----------------------------------------------------------#
+# Explore the data  -----
 #----------------------------------------------------------#
 
-# get all the unique species names
-unique_birds <- birds_no_geom |> 
-  distinct(sci_name)
+# total rows -> 11961
+gpkg_table(geopac, "all_species") %>%
+  filter(presence %in% c(1, 2, 3), seasonal == 1) %>%
+  summarise(n_rows = n()) %>%
+  collect()
 
-# filter birds with breeding range polygon
-birds_breeding <- birds_no_geom |> 
-  filter(seasonal==2)|> 
-  distinct(sci_name)
+# unique species -> 10382
+gpkg_table(geopac, "all_species") %>%
+  filter(presence %in% c(1, 2, 3), seasonal == 1) %>%
+  summarise(n_species = n_distinct(sci_name)) %>%
+  collect()
 
-birds_breeding_native <- birds_no_geom |> 
-  filter(seasonal==2)|> 
-  filter(origin==1)|> 
-  filter(presence==1)|>
-  distinct(sci_name)
+# So we have duplicated species, we will have to union the polygons per species first
 
-# how many birds in BirdLife have a breeding range polygon
-nrow(birds_breeding)/nrow(unique_birds)*100
-# --> only 14 % 
+birds_shapes <- st_read(paste0(source_path, "GMBA_project/Raw_datasets/Birds/species/BOTW_2025.gpkg"),
+                 query = "SELECT sci_name, geom
+                          FROM all_species 
+                          WHERE presence IN (1, 2, 3)
+                          AND seasonal = 1")
 
+# Lets work with a subset (TO BE REMOVED)
+birds_shapes <- birds_shapes[sample(nrow(birds_shapes), 50), ]
+############
 
-# filter birds with breeding range polygon
-birds_resident <- birds_no_geom |> 
-  filter(seasonal==1)|> 
-  distinct(sci_name)
+birds_shapes <- birds_shapes %>%
+  rename(sciname = "sci_name")
 
-# how many birds in BirdLife have a resident range polygon
-nrow(birds_resident)/nrow(unique_birds)*100
-# --> 94 % 
-
-# I need to filter birds with breeding range, extant and native origin  
-# filter birds with breeding range polygon
-# some birds still have several ranges .. also from different sources 
-# moved to Arcgis pro here to handle the dataset 
-birds_resident_native <- birds_data |> 
-  filter(seasonal==1)|> 
-  filter(origin==1)|> 
-  filter(presence==1)
-
-
-birds_resident_native <- birds_no_geom |> 
-  filter(seasonal==1)|> 
-  filter(origin==1)|> 
-  filter(presence==1)|>
-  distinct(sci_name)
-
-
-birds_breeding_native <- birds_no_geom |> 
-  filter(seasonal==2)|> 
-  filter(origin==1)|> 
-  filter(presence==1)|>distinct(sci_name)
-
-
-
-## Test 
-aburria <- birds_data |> 
-  filter(sci_name =="Aburria aburri")|> 
-  filter(seasonal==1)|> 
-  filter(origin==1)|> 
-  filter(presence==1)
-
-birds_shapes <- sf::st_read(paste0(data_storage_path,"subm_global_alpine_biodiversity/Data/Birds/BirdLife/birdlife.shp"))
-
-birds_shapes <- make_shapes_valid(birds_shapes)
-length(unique(birds_no_geom$sci_nam))
-
+# Visual check
+ggplot(birds_shapes) +
+  geom_sf(data = birds_shapes[3,], fill = "lightblue") +
+  theme_perso()
 
 #--------------------------------------------------------------------#
-# Writing multipolygon ranges -----
+#  Cropping duplicated species -----
 #--------------------------------------------------------------------#
 
-unprocessed_species <- character()
-# keep species names which cannot be processed (with errors)
-# 16 of 10383 unique species cannot be processed
+duplicated_species <- birds_shapes %>%
+  st_drop_geometry() %>%
+  group_by(sciname) %>%
+  summarise(n = n()) %>%
+  filter(n > 1) %>%
+  pull(sciname)
 
-# Function to merge ranges if species has more than one range
-process_species <- function(species_name, data) {
-  tryCatch({
-    species_data <- data|> 
-      filter(sci_nam == species_name) |> 
-      summarise(sci_nam = first(sci_nam), 
-                geometry = sf::st_union(geometry), do_union = FALSE) |> # merge ranges into multipolygon
-      st_cast("MULTIPOLYGON")
-    return(species_data)
-  }, error = function(e) {
-    # On error, print the message and return NULL
-    message("Error processing species: ", species_name, "\nError message: ", e$message)
-    unprocessed_species <<- c(unprocessed_species, species_name)
-    return(NULL)
-  })
+# Function to union ranges if species has more than one range
+union.ranges <- function(duplicated_species, all_species) {
+  
+  # union the duplicated species
+  birds_unioned <- birds_shapes %>% 
+    filter(sciname %in% duplicated_species) %>%
+    group_by(sciname) %>%
+    summarise(geom = st_union(geom), .groups = "drop")
+  
+  # keep non-duplicated species as is
+  birds_single <- birds_shapes %>%
+    filter(!sciname %in% duplicated_species)
+  
+  # combine both
+  birds_final <- bind_rows(birds_single, birds_unioned)
+  
+  return(birds_final)
 }
 
-# Unique species names
-species_names <- unique(birds_shapes$sci_nam)
-
 # Process each species and combine results
-results <- do.call(rbind, lapply(species_names, process_species, data = birds_shapes))
-results_sf <- st_as_sf(results)
+results <- union.ranges(duplicated_species, birds_shapes)
 
-# data frame for unprocessed species 
-unprocessed_species_df <- data.frame(sci_nam = unprocessed_species)
-
-# set geom 0 to handle data more easily
-results_no_geom<- sf::st_set_geometry(results_sf, NULL)
-
-# keep metadata for species 
-birds_metadata <- birds_no_geom|>
-  inner_join(results_no_geom, by = "sci_nam") |>
-  add_count(sci_nam, name = "occurrences") 
-
-
-occurrence_distribution <- birds_metadata |>
-  group_by(occurrences) |>
-  summarise(species_count = n_distinct(sci_nam), .groups = 'drop')
-
-# plot the number of polygons per species
-x11()
-ggplot(occurrence_distribution, aes(x = occurrences, y = species_count)) +
-  geom_bar(stat = "identity") +
-  scale_y_log10() +
-  geom_text(aes(label = species_count),
-            position = position_dodge(width = 0.9), vjust = -0.25, check_overlap = TRUE) +
-  labs(x = "count of range polygons per species",
-       y = "count of Species (log scale)",
-       title = "Counts of range polygons per species") +
-  theme_minimal()
-
-sp2 <- birds_metadata |> filter(occurrences==2)
-
-sitpyg <- results_sf |> filter(sci_nam =="Geranoaetus albicaudatus")
-x11()
-plot(sitpyg$geometry)
-
-#---------------------#
-# Write Results ----
-#----------------------#
-
-# the merged shapefile
-sf::st_write(results_sf,paste0(data_storage_path,"subm_global_alpine_biodiversity/Data/Birds/BirdLife/birdlife_merge.shp"))
-
-
-
-
-#----------------------------------------------------------#
-# 2. Source Selected BirdLife Data
-#----------------------------------------------------------#
-
-# 
-
-#----------------------------------------------------------#
-# 2.1. Set up  -----
-#----------------------------------------------------------#
-library(here)
-library(tidyverse)
-library(sf)
-
-# Load configuration file
-source(here::here("R/00_Config_file.R"))
-
-#----------------------------------------------------------#
-# 2.2. Load the range shapefiles  -----
-#----------------------------------------------------------#
-
-birds_shapes <- sf::st_read(paste0(data_storage_path,"subm_global_alpine_biodiversity/Data/Birds/BirdLife/birdlife_merge.shp"))|>
-  rename(sciname=sci_nam)
-
-#------------------------------------------------------------------------#
-#  Slice the data into 10 chunks to reduce computation time -----
-#----------------------------------------------------------------------------#
-
-# In total there are 10367 species to process
-# I divided in 10 chunks: chunk_1 : 10
-n <- nrow(birds_shapes)
-
-# Calculate the size of each chunk
-chunk_size <- ceiling(n / 10)
-
-# Create a new column that assigns each row to a chunk
-birds_shapes <- birds_shapes |>
-  mutate(chunk = ((row_number() - 1) %/% chunk_size) + 1)
-
-# split the data into a list of 10 sf data frames
-sf_chunks <- split(birds_shapes, birds_shapes$chunk)
-
-lapply(sf_chunks, nrow)
-
-# Define the directory to save shapefiles
-output_directory <- paste0(data_storage_path,"subm_global_alpine_biodiversity/Data/Birds/BirdLife")
-
-# Loop through chunks and write it as shapefile
-lapply(seq_along(sf_chunks), function(i) {
-  chunk <- sf_chunks[[i]]
-  # Construct the shapefile name
-  shapefile_name <- paste0(output_directory, "/chunk_", i, ".shp")
-  # Write the chunk to a shapefile
-  st_write(chunk, shapefile_name, delete_layer = TRUE, quiet = TRUE)
-})
-
-
-
+birds_shapes_clean <- results
 
 #----------------------------------------------------------#
 #  3. Overlap Birds ranges with GMBA shapefile
@@ -235,59 +113,46 @@ lapply(seq_along(sf_chunks), function(i) {
 # I divided in 10 chunks: chunk_1 : 10
 
 #----------------------------------------------------------#
-# 3.1. Set up  -----
-#----------------------------------------------------------#
-library(here)
-library(sf)
-library(dplyr)
-library(openxlsx)
-library(furrr)
-
-# Load configuration
-source(
-  here::here("R/00_Config_file.R")
-)
-
-#----------------------------------------------------------#
-# 3.2. Define the chunk name and load the data -----
+# 2.2. Source gmba mountain and alpine biome shps   -----
 #----------------------------------------------------------#
 
-# Define the chunk
-chunk_name <- "chunk_10" # Replace this with the the different chunks 
+#source the gmba regions
+mountain_shapes <- sf::st_read(paste0(source_path, "GMBA_project/GMBA_mountains/GMBA_Inventory_v2.0_standard_300/GMBA_Inventory_v2.0_standard_300.shp")) %>%
+  st_make_valid()
 
-# specify file path 
-file_path <- paste0(paste0(data_storage_path,"subm_global_alpine_biodiversity/Data/Birds/BirdLife/", chunk_name, ".shp"))
+# Group by Level_03 (scale of mountain system chosen)
+{
+  sf_use_s2(FALSE)
+  mountain_shapes03 <- mountain_shapes %>%
+    st_wrap_dateline(options = c("WRAPDATELINE=YES", "DATELINEOFFSET=180")) %>%
+    st_make_valid() %>%
+    group_by(Level_01, Level_02, Level_03) %>%
+    summarise(geometry = st_union(geometry), .groups = "drop") %>%
+    st_make_valid()
+  sf_use_s2(TRUE)
+  }
+# so we have 137 distinct combinations level_02 - level_03, i.e 137 mountain systems
 
-# Load the shapefile
-birds_shapes <- sf::st_read(file_path, options = "ENCODING=ISO-8859-1")|> 
-  dplyr::rename(sciname = sci_nam)
+# check correct mapping of the mountain systems
+ggplot() +
+  geom_sf(data = mountain_shapes03, fill = "grey30", color = NA) +
+  theme_minimal()
 
-
-# set geometry false to investigate data 
-birds_no_geom <- sf::st_set_geometry(birds_shapes, NULL)
-
-
-#----------------------------------------------------------#
-# 3.2. Source gmba mountain and alpine biome shps   -----
-#----------------------------------------------------------#
-
-#source the gmba regions whith alpine biome
-mountain_shapes <- sf::st_read(paste(data_storage_path,"subm_global_alpine_biodiversity/Data/Mountains/GMBA_Mountains_Input.shp", 
-                                     sep = "/"))|>
-  rename(Mountain_system = Mntn_sy)|> 
-  rename(Mountain_range = Mntn_rn)
-
-
-# source the alpine biome 
-alpine_biome <- sf::st_read(paste(data_storage_path,"subm_global_alpine_biodiversity/Data/Mountains/alpine_biome.shp", sep = "/"))|>
-  rename(Mountain_range = Mntn_rn)
-
-# check if there are any invalid shapes
-mountain_shapes <- make_shapes_valid(mountain_shapes) 
-
-alpine_biome <- make_shapes_valid(alpine_biome) 
-
-# there shouldnt be any invalid shapes
+# A bit of cleaning the dataframe
+# some rows are not defined at Level03 or Level02
+# in these cases, we fill the NA with the closest filled superior level
+{
+  sf_use_s2(FALSE)
+  mountain_shapes03 <- mountain_shapes03 %>%
+    st_wrap_dateline(options = c("WRAPDATELINE=YES", "DATELINEOFFSET=180")) %>%
+    st_make_valid() %>%
+    mutate(
+      Level_03 = coalesce(Level_03, Level_02, Level_01),
+      Level_02 = coalesce(Level_02, Level_01)
+    ) %>%
+    st_make_valid()
+  sf_use_s2(TRUE)
+  }
 
 #----------------------------------------------------------------------------------------#
 # 3.3. Intersect species ranges with GMBA and Alpine Biome and calculate % of overlap -----
@@ -306,71 +171,17 @@ alpine_biome <- make_shapes_valid(alpine_biome)
 #filter(sciname == "Ardea alba" | sciname == "Acrocephalus scirpaceus")
 
 # Execute the main function
-results <- overlap_mountains_and_alpinebiome(birds_shapes, mountain_shapes, alpine_biome)
+results <- overlap.mountain(mountain_shapes03, birds_shapes_clean)
 
 # Result is a list with two dataframes:
 # processed contains all species that have succesfully been processed
 # not processed contains species where an error occured
 
-results_processed <- results$processed
-results_not_processed <- results$not_processed
+birds_success <- results$results
+birds_failures <- results$failures
 
-#-----------------------------------------------------------------------------
-# 3.4. Remove all species which s distribution ranges overlap < 1% with GMBA range
-#-----------------------------------------------------------------------------
-
-results_filtered <- results_processed |> filter(overlap_percentage_mountain >= 1)
-
-
-#-------------------------
-# 3.5. Restructure dataframes
-#-------------------------
-
-# Join the  dataset with the intersection results
-birds_final <- inner_join(birds_shapes, results_filtered[, c("sciname",
-                                                             "Mountain_range",
-                                                             "overlap_percentage_mountain",
-                                                             "overlap_percentage_alpine","species_area")], 
-                          by = "sciname")
-# Write to a checklist
-birds_checklist <- birds_final|>
-  sf::st_set_geometry(NULL) |> # to remove the geometries for the checklist
-  select(sciname,
-         Mountain_range,
-         species_area,
-         overlap_percentage_mountain,
-         overlap_percentage_alpine)
-
-
-#------------------------------------------#
-# 3.7. Save the data as checklist  -----
-#------------------------------------------#
-
-## The checklist:
-
-# Define the path to your Excel file
-file_path <- paste0(data_storage_path, "subm_global_alpine_biodiversity/Data/Birds/processed/Birds_Checklist.xlsx")
-
-# function to write the data to an excel file: each order is written to a seperate sheet
-save_excel_sheet(file_path, chunk_name, birds_checklist)
-
-
-#-------------------------------------------#
-# 3.6. Save the data with geometries  -----
-#-------------------------------------------#
-
-# assign the order name to save it
-assign(chunk_name, birds_final, envir = .GlobalEnv)
-
-# this is the 
-RUtilpol::save_latest_file(
-  object_to_save =paste0(chunk_name),
-  dir = paste0(data_storage_path, "subm_global_alpine_biodiversity/Data/Birds/processed/geom"),
-  prefered_format = "rds",
-  use_sha = TRUE) 
-
-
-
+# Let's create a base dataframe in which we will add the different columns throughout the process
+birds_dataframe <- birds_success
 
 #----------------------------------------------------------#
 #  4. Bind Elevations to Species 
@@ -379,111 +190,48 @@ RUtilpol::save_latest_file(
 # This script binds elevation data to species names sourced from Global database of birds (quintero and Jetz, 2018)
 
 #----------------------------------------------------------#
-# 4.1. Set up  -----
-#----------------------------------------------------------#
-library(here)
-library(sf)
-library(visdat)
-library(tidyverse)
-library(readxl)
-
-# Load configuration
-source(
-  here::here("R/00_Config_file.R")
-)
-
-#----------------------------------------------------------#
 # 4.2. Load data -----
 #----------------------------------------------------------#
 
-file_path <- paste0(data_storage_path, "subm_global_alpine_biodiversity/Data/Birds/processed/Birds_Checklist.xlsx")
+birds_elev_limits <- readxl::read_excel(paste0(source_path, "GMBA_project/Raw_datasets/Birds/elevation/birds_elevational_limits.xlsx"))
+mountain_ID <- readxl::read_excel(paste0(source_path, "GMBA_project/Raw_datasets/Birds/elevation/mountain_range_ID.xlsx"))
 
-# this binds the different sheets into one dataframe
-Birds_Checklist <- readxl::excel_sheets(file_path) |>
-  map_df(~read_excel_sheets(.x))
+# A bit of cleaning
+birds_elev_limits <- birds_elev_limits %>% 
+  select(-7) %>%
+  rename(Mountain_ID = "Mountain ID")
+mountain_ID <- mountain_ID %>%
+  select(Mountain_ID, `Mountain Range`) %>%
+  filter(!is.na(Mountain_ID) & !is.na(`Mountain Range`)) %>%
+  rename(Mountain_system = "Mountain Range")
 
-length(unique(Birds_Checklist$sciname))
+# Add the corresponding Mountain_system to the mountain ID number in the elev_limit file
+birds_elev_limits <- birds_elev_limits %>%
+  left_join(mountain_ID, by = "Mountain_ID") %>%
+  select(- Mountain_ID) %>%
+  rename(
+    min_elevation = "Minimum elevation",
+    max_elevation = "Maximum elevation",
+    sciname = "Species"
+  )
 
-#----------------------------------------------------------#
-# 4.3. Load elevation data -----
-#----------------------------------------------------------#
-# Dataset by Quintero and Jetz
-# mountain dataset has mountain IDs (need to be linked to elevations)
-qu_j_mountain_data <- readxl::read_excel(paste0(data_storage_path,"subm_global_alpine_biodiversity/Data/Birds/processed/additional_data/Quintero_Jetz_Mountains.xlsx"))|>
-  janitor::clean_names()
+# There can be duplicates for a same species x Mountain system (because we also have a column country)
+# We don't really know what these countries means, so we will take for these duplicates the min and max per mountain system
+birds_elev_limits <- birds_elev_limits %>%
+  group_by(sciname, Mountain_system) %>%
+  summarise(
+    min_elevation = min(min_elevation, na.rm = TRUE),
+    max_elevation = max(max_elevation, na.rm =TRUE),
+    .groups = "drop"
+  ) %>%
+  mutate(
+    min_elevation = ifelse(is.infinite(min_elevation), NA, min_elevation),  # clean the Inf values with NA
+    max_elevation = ifelse(is.infinite(max_elevation), NA, max_elevation)
+  )
 
-# this dataset has the elevations and mountain IDs
-qu_j_elevations <- readxl::read_excel(paste0(data_storage_path,"subm_global_alpine_biodiversity/Data/Birds/processed/additional_data/Quintero_Jetz_elev_ranges_birds.xlsx"))|>
-  janitor::clean_names()|> 
-  left_join(qu_j_mountain_data |> # join the mountain names 
-              select(mountain_range,mountain_id),by="mountain_id")|>
-  select(-x7)|>
-  rename(Mountain_range_Qu_J = mountain_range)|>
-  rename(min_elevation = minimum_elevation)|>
-  rename(max_elevation = maximum_elevation)|>
-  rename(sciname = species)
-
-#----------------------------------------------------------#
-#  save data -----
-#----------------------------------------------------------#
-
-writexl::write_xlsx(qu_j_elevations,data_storage_path, "subm_global_alpine_biodiversity/Data/Birds/processed/Birds_Elevations_Qu_J.xlsx")
-
-
-#----------------------------------------------------------#
-# check out data -----
-#----------------------------------------------------------#
-
-Elevation_data_Birds <- readxl::read_excel(paste0(data_storage_path, "subm_global_alpine_biodiversity/Data/Birds/processed/Birds_Elevations_Qu_J.xlsx"))|> 
-  group_by(sciname) |>
-  summarize(
-    min_elevation = round(mean(min_elevation, na.rm = TRUE), 0),
-    max_elevation = round(mean(max_elevation, na.rm = TRUE), 0))
-
-#----------------------------------------------------------#
-# investigate data availability --
-#----------------------------------------------------------#
-
-Birds_Elevations <- Birds_Checklist|> 
-  left_join(Elevation_data_Birds,by = "sciname")|> 
-  arrange(sciname)
-
-GMBA_names_level_03 <- readRDS(paste0(data_storage_path,"subm_global_alpine_biodiversity/Data/Mountains/GMBA_names_level_03_04.rds"))|>
-  filter(Hier_Lvl =="3")|>
-  group_by(Mountain_range) |>
-  summarise(gmba_ID = first(gmba_ID), 
-            Mountain_system = first(Mountain_system))
-
-
-Birds_Elevations <- Birds_Elevations |>
-  left_join(GMBA_names_level_03_unique, by = "Mountain_range")|>
-  select(sciname, gmba_ID, Mountain_system, 
-         Mountain_range, species_area, overlap_percentage_mountain, 
-         overlap_percentage_alpine, min_elevation, max_elevation)
-
-
-
-writexl::write_xlsx(Birds_Elevations,data_storage_path, "subm_global_alpine_biodiversity/Data/Birds/processed/Birds_Checklist_Elevations_Qu_J.xlsx")
-
-#----------------------------------------------------------#
-# visualize missing data --
-#----------------------------------------------------------#
-vismis <- Birds_Elevations |>
-  select(sciname,min_elevation)|>
-  group_by(sciname)|>
-  summarise(min_elevation = mean(min_elevation, na.rm = FALSE)) |>
-  rename("Missing Elevation Data" = min_elevation)|>
-  select("Missing Elevation Data")
-
-
-# Using vis_miss to visualize missing data
-x11()
-vis_miss(vismis) +
-  ggtitle("Birlife Data with elevations from Quintero Jetz") +
-  theme(plot.title = element_text(hjust = 0.5))+theme(legend.position = "none",
-                                                      axis.ticks = element_blank())
-
-
+birds_dataframe <- birds_dataframe %>%
+  left_join(birds_elev_limits %>% select(sciname, min_elevation, max_elevation, Mountain_system),
+            by = c("sciname", "Mountain_system"))
 
 #----------------------------------------------------------#
 #  5. Get elevations with DEM 
@@ -491,68 +239,12 @@ vis_miss(vismis) +
 
 # In this script I extract quartiles for species min and max elevations from their range shps using DEM
 
-#----------------------------------------------------------#
-# 5.1. Set up  -----
-#----------------------------------------------------------#
-library(here)
-library(sf)
-library(tidyverse)
-library(data.table)
-library(openxlsx)
 
-
-# Load configuration file
-source(here::here("R/00_Config_file.R"))
-
-#----------------------------------------------------------#
+-------------------------------------------------#
 # 5.2. Load species data and set API key  -----
 #----------------------------------------------------------#
 
-# Read the checklist that includes the elevation data
-Checklist_Elev <- readxl::read_xlsx(paste0(data_storage_path,"subm_global_alpine_biodiversity/Data/Birds/processed/Birds_Elevations_Qu_J.xlsx"))
 
-# load shapefile
-file_path <- paste0(paste0(data_storage_path,"subm_global_alpine_biodiversity/Data/Birds/BirdLife/birdlife_merge.shp"))
-
-# 
-birds_shapes <- sf::st_read(file_path, options = "ENCODING=ISO-8859-1")|> 
-  dplyr::rename(sciname = sci_nam)|> 
-  select(sciname,geometry)
-
-# insert API for elevatr package
-# https://cran.r-project.org/web/packages/elevatr/elevatr.pdf
-topo_key <-"" #insert you API key
-elevatr::set_opentopo_key(topo_key)
-
-#------------------------------#
-# 5.2. Load the mountains  -----
-#------------------------------#
-
-#source the gmba regions whith alpine biome
-mountain_shapes <- sf::st_read(paste(data_storage_path,"subm_global_alpine_biodiversity/Data/Mountains/GMBA_Mountains_Input.shp", 
-                                     sep = "/"))|>
-  rename(Mountain_system = Mntn_sy)|> 
-  rename(Mountain_range = Mntn_rn)
-
-# check if there are any invalid shapes
-mountain_shapes <- make_shapes_valid(mountain_shapes) 
-
-#-----------------------------------------------------------#
-# 5.3. Define chunks to reduce computation time   -----
-#------------------------------------------------------------#
-
-# merge the geometries to the checklist
-Checklist_Elev_DEM_merge <- merge(Checklist_Elev, birds_shapes, by = c("sciname"), all.x = TRUE)
-
-#Checklist_Elev_DEM <- Checklist_Elev_DEM_merge[1:500,]
-#Checklist_Elev_DEM <- Checklist_Elev_DEM_merge[501:1000,]
-#Checklist_Elev_DEM <- Checklist_Elev_DEM_merge[1001:1500]
-#Checklist_Elev_DEM <- Checklist_Elev_DEM_merge[1501:3500,]
-#Checklist_Elev_DEM <- Checklist_Elev_DEM_merge[3501:7000,]
-#Checklist_Elev_DEM <- Checklist_Elev_DEM_merge[7001:10001,]
-#Checklist_Elev_DEM <- Checklist_Elev_DEM_merge[10001:13000,]
-#Checklist_Elev_DEM <- Checklist_Elev_DEM_merge[13001:16000,]
-Checklist_Elev_DEM <- Checklist_Elev_DEM_merge[16001:19617,]
 #------------------------------------------------------------------------#
 # 5.4. Get birds elevational ranges with DEM -----
 #-------------------------------------------------------------------------#
