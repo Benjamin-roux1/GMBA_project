@@ -13,120 +13,89 @@
 #----------------------------------------------------------#
 # 1.1. Set up  -----
 #----------------------------------------------------------#
-library(here)
-library(tidyverse)
-library(sf)
+library(here); library(data.table); library(dplyr)
+library(tidyverse); library(readxl); library(terra)
+library(sf); library(arrow); library(rgbif)
 
-# Load configuration file
-source(here::here("R/00_Config_file.R"))
+# Load configuration
+#source(
+  #here::here("R/00_Config_file.R")
+#)
+
+# define data path OR even config.R file with libraries & path
+source_path <- "C:/Users/berou1714/OneDrive - Norwegian University of Life Sciences/Desktop/PhD_project/"
+
+# source all functions
+list.files(path = paste0(source_path, "GMBA_project/Functions"), pattern = "*.R", full.names = TRUE) %>%
+  purrr::walk(source)
+
 
 #----------------------------------------------------------#
 # 1.2. Load the range shapefiles  -----
 #----------------------------------------------------------#
-reptile_shapes <- sf::st_read(paste(data_storage_path,"subm_global_alpine_biodiversity/Data/Reptiles/GARD_2022/Gard_1_7_ranges.shp", sep = "/"),options = "ENCODING=ISO-8859-1")
+reptile_shapes <- sf::st_read(paste0(source_path, "GMBA_project/Raw_datasets/Reptiles/Distribution/doi_10_5061_dryad_9cnp5hqmb__v20220427/Gard_1_7_ranges.shp"), 
+                              options = "ENCODING=ISO-8859-1") %>%
+  st_make_valid()
 
-reptile_shapes <- make_shapes_valid(reptile_shapes)
+#### subset for code testing (TO BE REMOVED)
+reptile_shapes <- reptile_shapes[sample(nrow(reptile_shapes), 50), ]
+####
 
-#----------------------------------------------------------#
-# 1.3. Check out data  -----
-#----------------------------------------------------------#
-# Check out data structure
-reptile_shapes_df <- as.data.frame(reptile_shapes)
-
-
-reptile_shapes_df |> 
-  group_by(group) |> 
-  summarise(num_species = n_distinct(binomial))
-
-# there are 6 groups of reptiles
-# lizards are the biggest group with > 6000 species
-
-#----------------------------------------------------------#
-# 1.4. Split the data by group  -----
-#----------------------------------------------------------#
-
-# Split the data by 'group'
-groups_list <- split(reptile_shapes, reptile_shapes$group)
-
-# Loop through each group and save as a new shapefile
-for (group_name in names(groups_list)) {
-  # output file name
-  output_file_name <- paste0(data_storage_path, "subm_global_alpine_biodiversity/Data/Reptiles/GARD_2022/groups/", group_name, ".shp")
-  
-  # Write the shapefile
-  sf::st_write(groups_list[[group_name]], output_file_name, delete_dsn = TRUE)
-}
-
-
-
+reptile_shapes <- reptile_shapes %>%
+  rename(sciname = binomial)
 
 #----------------------------------------------------------#
 #  2. Overlap Reptile ranges with GMBA shapefile
 #----------------------------------------------------------#
 
 # This script overlaps reptile distribution ranges with GMBA mountain ranges (level 03) and alpine biome 
-# The species range shps are partly very large files. Therefore, I process each group seperately
+# The species range shps are partly very large files. Therefore, I process each group separately
 # There are 6 groups (see 00_Source_data_GARD)
-
-#----------------------------------------------------------#
-# 2.1. Set up  -----
-#----------------------------------------------------------#
-library(here)
-library(sf)
-library(dplyr)
-library(openxlsx)
-library(furrr)
-
-# Load configuration
-source(
-  here::here("R/00_Config_file.R")
-)
-
-#----------------------------------------------------------#
-# 2.2. Define the group name and load the data -----
-#----------------------------------------------------------#
-# These are the 6 groups
-
-# Rhynchocephalia           
-# amphisbaenian           
-# croc
-# lizard
-# snake
-# turtle
-
-# Define the group name
-group_name <- "lizard" # Replace this with the name of the group
-
-# Construct the file path 
-file_path <- paste0(data_storage_path, "subm_global_alpine_biodiversity/Data/Reptiles/GARD_2022/groups/", group_name, ".shp")
-
-# Load the shapefile
-reptile_shapes <- sf::st_read(file_path, options = "ENCODING=ISO-8859-1")|> 
-  dplyr::rename(sciname = binomial)
-
 
 #----------------------------------------------------------#
 # 2.2. Source gmba mountain and alpine biome shps   -----
 #----------------------------------------------------------#
 
-#source the gmba regions whith alpine biome
-mountain_shapes <- sf::st_read(paste(data_storage_path,"subm_global_alpine_biodiversity/Data/Mountains/GMBA_Mountains_Input.shp", 
-                                     sep = "/"))|>
-  rename(Mountain_system = Mntn_sy)|> 
-  rename(Mountain_range = Mntn_rn)
+#source the gmba regions
+mountain_shapes <- sf::st_read(paste0(source_path, "GMBA_project/GMBA_mountains/GMBA_Inventory_v2.0_standard_300/GMBA_Inventory_v2.0_standard_300.shp")) %>%
+  st_make_valid()
 
+# Group by Level_03 (scale of mountain system chosen)
+{
+  sf_use_s2(FALSE)
+mountain_shapes03 <- mountain_shapes %>%
+  st_wrap_dateline(options = c("WRAPDATELINE=YES", "DATELINEOFFSET=180")) %>%
+  st_make_valid() %>%
+  group_by(Level_01, Level_02, Level_03) %>%
+  summarise(geometry = st_union(geometry), .groups = "drop") %>%
+  st_make_valid()
+sf_use_s2(TRUE)
+}
+# so we have 137 distinct combinations level_02 - level_03, i.e 137 mountain systems
 
-# source the alpine biome 
-alpine_biome <- sf::st_read(paste(data_storage_path,"subm_global_alpine_biodiversity/Data/Mountains/alpine_biome.shp", sep = "/"))|>
-  rename(Mountain_range = Mntn_rn)
+# check correct mapping of the mountain systems
+ggplot() +
+  geom_sf(data = mountain_shapes03, fill = "grey30", color = NA) +
+  theme_minimal()
 
-# check if there are any invalid shapes
-mountain_shapes <- make_shapes_valid(mountain_shapes) 
-
-alpine_biome <- make_shapes_valid(alpine_biome) 
+# A bit of cleaning the dataframe
+# some rows are not defined at Level03 or Level02
+# in these cases, we fill the NA with the closest filled superior level
+{
+  sf_use_s2(FALSE)
+mountain_shapes03 <- mountain_shapes03 %>%
+  st_wrap_dateline(options = c("WRAPDATELINE=YES", "DATELINEOFFSET=180")) %>%
+  st_make_valid() %>%
+  mutate(
+    Level_03 = coalesce(Level_03, Level_02, Level_01),
+    Level_02 = coalesce(Level_02, Level_01)
+  ) %>%
+  st_make_valid()
+sf_use_s2(TRUE)
+}
 
 #----------------------------------------------------------------------------------------#
-# 2.3. Intersect species ranges with GMBA and Alpine Biome and calculate % of overlap -----
+# 2.3. Intersect species ranges with GMBA and calculate overlap (value in km2 and %) 
 #-----------------------------------------------------------------------------------------#
 
 # The function intersect_species_mountain ranges:
@@ -134,81 +103,33 @@ alpine_biome <- make_shapes_valid(alpine_biome)
 # 2. If sp and mountain bbox intersect 
 #   2.1. it takes the area of a species in km2 (is already in reptile dataset)
 #   2.2. the percentage of overlap of the species range with the mountain range 
-#   2.3. the percentage of overlap with the alpine biome in that mountain range
-# 3. removes all species with < 1% overlap with a GMBA Mountain range
+# 3. removes all species with < 5km2 and < 1% overlap with a GMBA Mountain range
 
 
 # To test function
-#reptile_shapes_filtered <- reptile_shapes |>
-#filter(sciname == "Amphisbaena camura" | sciname == "Amphisbaena pericensis")
-#filter(sciname == "Amphisbaena pericensis")
-
+#reptile_shapes_filtered <- reptile_shapes[1:10,]
+#results_test <- overlap.mountain(mountain_shapes03, reptile_shapes_filtered)
+# visual check
+# subset your data
+#sahara <- mountain_shapes03 %>% filter(Level_03 == "Sahara Ranges")
+#rueppellii <- reptile_shapes %>% filter(binomial == "Ablepharus rueppellii")
+#ggplot() +
+  #geom_sf(data = sahara, fill = "orange", color = NA) +                   
+  #geom_sf(data = rueppellii, fill = "steelblue", alpha = 0.5, color = NA) +     
+  #theme_minimal()
 
 # Execute the main function
-results <- overlap_mountains_and_alpinebiome(reptile_shapes, mountain_shapes, alpine_biome)
+results <- overlap.mountain(mountain_shapes03, reptile_shapes)
 
 # Result is a list with two dataframes:
-# processed contains all species that have succesfully been processed
-# not processed contains species where an error occured
+# results_df contains all species that have succesfully been processed
+# failures_df contains species where an error occured
 
-results_processed <- results$processed
-results_not_processed <- results$not_processed
+reptile_success <- results$results
+results_failures <- results$failures
 
-
-#-----------------------------------------------------------------------------
-# 2.4. Remove all species which s distribution ranges overlap < 1% with GMBA range
-#-----------------------------------------------------------------------------
-
-results_filtered <- results_processed |> filter(overlap_percentage_mountain >= 1)
-
-
-#-------------------------
-# 2.5. Restructure dataframes
-#-------------------------
-
-# Join the  dataset with the intersection results
-reptiles_final <- inner_join(reptile_shapes, results_filtered[, c("sciname",
-                                                                  "Mountain_range",
-                                                                  "overlap_percentage_mountain",
-                                                                  "overlap_percentage_alpine")], 
-                             by = "sciname")
-# Write to a checklist
-reptiles_checklist <- reptiles_final|>
-  sf::st_set_geometry(NULL) |> # to remove the geometries for the checklist
-  select(TaxonID,
-         group,
-         family,
-         sciname,
-         Mountain_range,
-         area,
-         overlap_percentage_mountain,
-         overlap_percentage_alpine)|> rename(species_area = area)
-
-#-------------------------------------------#
-# 2.6. Save the data with geometries  -----
-#-------------------------------------------#
-
-# assign the order name to save it
-assign(group_name, reptiles_final, envir = .GlobalEnv)
-
-# this is the 
-RUtilpol::save_latest_file(
-  object_to_save =paste0(group_name),
-  dir = paste0(data_storage_path, "subm_global_alpine_biodiversity/Data/Reptiles/processed/geom"),
-  prefered_format = "rds",
-  use_sha = TRUE) 
-
-#------------------------------------------#
-# 2.7. Save the data as checklist  -----
-#------------------------------------------#
-
-# Define the path to your Excel file
-file_path <- paste0(data_storage_path, "subm_global_alpine_biodiversity/Data/Reptiles/processed/Reptiles_Checklist.xlsx")
-
-# function to write the data to an excel file: each order is written to a seperate sheet
-save_excel_sheet(file_path, group_name, reptiles_checklist)
-
-
+# Let's create a base dataframe in which we will add the different columns throughout the process
+reptile_dataframe <- reptile_success
 
 #----------------------------------------------------------#
 #  3. Bind Elevations to Species 
@@ -219,67 +140,31 @@ save_excel_sheet(file_path, group_name, reptiles_checklist)
 # https://onlinelibrary.wiley.com/doi/10.1111/geb.13812 
 
 #----------------------------------------------------------#
-# 3.1. Set up  -----
-#----------------------------------------------------------#
-library(here)
-library(sf)
-library(visdat)
-library(tidyverse)
-library(readxl)
-
-# Load configuration
-source(
-  here::here("R/00_Config_file.R")
-)
-
-#----------------------------------------------------------#
 # 3.2. Load data -----
 #----------------------------------------------------------#
 
-
-file_path <- paste0(data_storage_path, "subm_global_alpine_biodiversity/Data/Reptiles/processed/Reptiles_Checklist.xlsx")
-
-# this binds the different sheets into one dataframe
-Reptile_Checklist <- readxl::excel_sheets(file_path) |>
-  map_df(~read_excel_sheets(.x))
-
-
-
 # Load the elevation data
-Elevation_data_Reptiles <- read_excel(paste0(data_storage_path, "subm_global_alpine_biodiversity/Data/Reptiles/processed/additional_data/Meiri_2024_elevation_data.xlsx")) |> 
-  rename(sciname = 'Species name (Binomial)')|>
-  rename(min_elevation = "Minimum elevation (m)")|>
+elevation_data <- read_excel(paste0(source_path, "GMBA_project/Raw_datasets/Reptiles/Elevation/Supplementary_Table_S1_-_squamBase1.xlsx")) %>%
+  select("Species name (Binomial)", "Minimum elevation (m)", "Maximum elevation (m)") %>%
+  rename(sciname = "Species name (Binomial)") %>% 
+  rename(min_elevation = "Minimum elevation (m)") %>%
   rename(max_elevation = "Maximum elevation (m)")
+
+# Change column type of elevation limits to numeric
+elevation_data[, 2:3] <- lapply(elevation_data[, 2:3], as.numeric)
 
 #----------------------------------------------------------#
 # 3.3. Left join data -----
 #----------------------------------------------------------#
 
-# Left join to see only the data where we have distribution data
-Reptile_Elevations <- Reptile_Checklist|> left_join(Elevation_data_Reptiles,by = "sciname")|> 
+# Add extracted range limits to our base dataframe
+reptile_dataframe <- reptile_dataframe %>%
+  left_join(elevation_data, by = "sciname") %>% 
   arrange(sciname)
 
-GMBA_names_level_03 <- readRDS(paste0(data_storage_path,"subm_global_alpine_biodiversity/Data/Mountains/GMBA_names_level_03_04.rds"))|>
-  filter(Hier_Lvl =="3")|>
-  group_by(Mountain_range) |>
-  summarise(gmba_ID = first(gmba_ID), 
-            Mountain_system = first(Mountain_system))
-
-
-Reptile_Elevations <- Reptile_Elevations |>
-  left_join(GMBA_names_level_03, by = "Mountain_range")|>
-  select(TaxonID, group, family, sciname, GMBA_ID, Mountain_system, 
-         Mountain_range, species_area, overlap_percentage_mountain, 
-         overlap_percentage_alpine, min_elevation, max_elevation)
-
-
-#----------------------------------------------------------#
-# 3.4. Save data -----
-#----------------------------------------------------------#
-
-writexl::write_xlsx(Reptile_Elevations, data_storage_path, "subm_global_alpine_biodiversity/Data/Reptiles/processed/Reptiles_Checklist_Elevations.xlsx")
-
-
+# A bit of cleaning. Remove negative elevation data (set to 0)
+reptile_dataframe <- reptile_dataframe %>%
+  mutate(min_elevation = ifelse(min_elevation < 0, 0, min_elevation))
 
 
 #----------------------------------------------------------#
@@ -291,396 +176,146 @@ writexl::write_xlsx(Reptile_Elevations, data_storage_path, "subm_global_alpine_b
 # https://portal.opentopography.org/raster?opentopoID=OTSRTM.042013.4326.1
 
 #----------------------------------------------------------#
-# 4.1. Set up  -----
-#----------------------------------------------------------#
-library(here)
-library(sf)
-library(tidyverse)
-library(data.table)
-library(openxlsx)
-
-
-# Load configuration file
-source(here::here("R/00_Config_file.R"))
-
-#----------------------------------------------------------#
 # 4.2. Load species data and set API key  -----
 #----------------------------------------------------------#
 
-# These are the 6 groups
+# From the dataframe with species selected for each mountain range, we add their range distribution as a new column
+reptile_mountain <- reptile_dataframe %>%
+  left_join(reptile_shapes %>% select(sciname, geometry), by = "sciname")
 
-# Rhynchocephalia           
-# amphisbaenian           
-# croc
-# lizard
-# snake
-# turtle
+#-------------------------------------------------------------#
+# 4.2. Crop species distribution in each mountain range  -----
+#-------------------------------------------------------------#
+reptile_mountain_sf <- st_as_sf(reptile_mountain) %>%
+  st_make_valid()
 
-# Define the group name
-group_name <- "lizard" # Replace this with the name of the group
+# Intersect for each row the species distribution with the corresponding mountain shp
+{
+  sf_use_s2(FALSE)
+reptile_intersect <- reptile_mountain_sf %>%
+  rowwise() %>%
+  mutate(
+    geometry = st_intersection(
+      geometry,
+      mountain_shapes03 %>% 
+        filter(Level_03 == Mountain_range) %>% 
+        st_geometry()
+    )
+  ) %>%
+  ungroup()
+sf_use_s2(TRUE)
+}
 
-# Read the checklist that includes the elevation data
-Checklist_Elev <- readxl::read_xlsx(paste0(data_storage_path,"subm_global_alpine_biodiversity/Data/Reptiles/processed/Reptiles_Checklist_Elevations.xlsx"))|>
-  filter(group==group_name)
 
+# Visual check of the cropping
+sp <- reptile_intersect[1, ]
+bbox <- st_bbox(reptile_mountain_sf %>% filter(sciname == sp$sciname))
+ggplot() +
+  geom_sf(data = mountain_shapes03, fill = NA, color = "grey50") +
+  geom_sf(data = reptile_mountain_sf %>% filter(sciname == sp$sciname),  # Whole species range
+          fill = "lightblue", alpha = 0.6) + 
+  geom_sf(data = reptile_intersect %>% filter(sciname == sp$sciname),  # Intersected species range
+          fill = "red", alpha = 0.4) +
+  coord_sf(xlim = c(bbox["xmin"], bbox["xmax"]), 
+           ylim = c(bbox["ymin"], bbox["ymax"])) +
+  theme_perso()
 
-# Load the shapefiles 
-file_path <- paste0(data_storage_path, "subm_global_alpine_biodiversity/Data/Reptiles/GARD_2022/groups/", group_name, ".shp")
-
-# Load the shapefile
-reptile_shapes <- sf::st_read(file_path, options = "ENCODING=ISO-8859-1")|> 
-  dplyr::rename(sciname = binomial)
-
-# insert API elvatr package
-topo_key <-"" #insert you API key
-elevatr::set_opentopo_key(topo_key)
+# Now we have a dataframe with all the species and their distribution in each mountain ranges specifically
 
 #------------------------------#
-# 4.2. Load the mountains  -----
+# 4.2. Add the DEM  -----
 #------------------------------#
+dem <- terra::rast(paste0(source_path, "GMBA_project/demMountains_GLO90.tif"))
 
-#source the gmba regions whith alpine biome
-mountain_shapes <- sf::st_read(paste(data_storage_path,"subm_global_alpine_biodiversity/Data/Mountains/GMBA_Mountains_Input.shp", 
-                                     sep = "/"))|>
-  rename(Mountain_system = Mntn_sy)|> 
-  rename(Mountain_range = Mntn_rn)
+#----------------------------------------#
+# 4.2. Estimate the best quantile  -----
+#----------------------------------------#
 
-# check if there are any invalid shapes
-mountain_shapes <- make_shapes_valid(mountain_shapes) 
+quantiles <- estimate.quantile(reptile_intersect, dem)
 
-#-----------------------------------------------------------#
-# 4.3. Load the species geometries (distribution ranges)  -----
-#------------------------------------------------------------#
+ggplot(quantiles, aes(x = quantile)) +
+  geom_col(aes(y = mean_dev_min, fill = "red", alpha = 0.5)) + 
+  geom_col(aes(y = mean_dev_max, fill = "blue", alpha = 0.5)) +
+  theme_minimal()
 
-# merge the geometries to the checklist
-Checklist_Elev_DEM <- merge(Checklist_Elev, reptile_shapes, by = c("sciname"), all.x = TRUE)
 
 #------------------------------------------------------------------------#
 # 4.4. Get reptile elevational ranges with DEM -----
 #-------------------------------------------------------------------------#
 
-# Filter group to process
-group <- Checklist_Elev_DEM |> 
-  filter(group == group_name)|>
-  distinct(sciname, Mountain_range, Mountain_system, .keep_all = TRUE)
+quantile_min <- quantiles %>%
+  filter(quantile <= 0.49) %>%
+  filter(mean_abs_dev == min(mean_abs_dev))
+quantile_min
+quantile_max <- quantiles %>%
+  filter(quantile >= 0.51) %>%
+  filter(mean_abs_dev == min(mean_abs_dev))
+quantile_max
 
-# Define the focus GMBA systems 
-Focus_GMBA_systems<-unique(group$Mountain_system)
+reptile_elevations_DEM <- extract.elevational.limits.DEM(reptile_intersect, dem, quantile_min, quantile_max)
 
-# Validate the shapes in the df to process
-group<- validate_shapes_individually(group)
+reptile_dataframe <- reptile_dataframe %>%
+  left_join(reptile_elevations_DEM, by = c("sciname", "Mountain_range"))
 
-# This is the old function from the mammal workflow --> new one has to be refined
-results_dem_df <- extract_elevational_ranges(group, Focus_GMBA_systems)
+#------------------------------------------------------------------------#
+# 4.4. Get reptile elevational ranges with GBIF -----
+#-------------------------------------------------------------------------#
 
+# Import GBIF dataset
+reptile_GBIF <- arrow::open_dataset(paste0(source_path, "GBIF_data/data/Squamata_parquetclean"))
 
-# Bind the dataframes togeher
-results_dem_df_b <- group|> 
-  left_join(results_dem_df,by=c("sciname","Mountain_range","Mountain_system"))|>
-  rename(max_elevation_validation = max_elevation)|>
-  rename(min_elevation_validation = min_elevation)|>
-  sf::st_as_sf(results_dem_df_b)|> 
-  sf::st_set_geometry(NULL)
+# Collect Parquet dataset to R
+reptile_GBIF <- reptile_GBIF %>%
+  dplyr::select(species, decimalLatitude, decimalLongitude, Level_01, Level_02,
+                Level_03) %>%
+  collect()
 
-#-------------------------------#
-# 4.5. Restructure Dataframes -----
-#--------------------------------#
+reptile_GBIF <- reptile_GBIF %>%
+  rename(sciname = "species")
 
-quantile_info <- results_dem_list$quantile_info
-results_dem_df <- results_dem_list$results
+# TAKE A SUBSET (TO BE REMOVED)
+reptile_GBIF <- reptile_GBIF %>%
+  filter(sciname %in% (distinct(., sciname) %>% slice_sample(n = 50) %>% pull(sciname)))
 
-results_dem_df <- test|> 
-  left_join(results_dem_df,by=c("sciname","Mountain_range","Mountain_system"))|>
-  select(-geometry)|>
-  rename(max_elevation_validation = max_elevation)|>
-  rename(min_elevation_validation = min_elevation)|>
-  left_join(quantile_info,by=c("sciname","Mountain_range"))
+# Fill empty Level_03 by the Level_02 or Level_01
+reptile_GBIF <- reptile_GBIF %>%
+  mutate(
+    Level_03 = coalesce(Level_03, Level_02, Level_01),
+    Level_02 = coalesce(Level_02, Level_01))
 
+# ---- Standardize species names
+species_names <- standardize.species.names(reptile_GBIF, reptile_mountain)
+GBIF_clean <- species_names$gbif
+reptile_clean <- species_names$litterature
+
+reptiles_GBIF_elev <- extract.elevational.limits.GBIF(GBIF_clean, dem)
+
+# A bit of cleaning
+reptiles_GBIF_elev <- reptiles_GBIF_elev %>%
+  rename(Mountain_range = "Level_03")
+
+# Add GBIF elev to the base dataframe
+reptile_dataframe <- reptile_dataframe %>%
+  left_join(reptiles_GBIF_elev, by = c("sciname", "Mountain_range"))
 
 #---------------------------#
 # 4.6. Save data -----
 #--------------------------#
 
-# Define the dynamic file path
-file_path <- file.path(data_storage_path, 
-                       "subm_global_alpine_biodiversity/Data/Reptiles/processed/", 
-                       paste0("Reptiles_Checklist_Elevations_DEM_", group_name, ".xlsx"))
-
 # Save the file
-writexl::write_xlsx(results_dem_df_b, file_path)
+writexl::write_xlsx(reptile_dataframe, paste0(source_path, "GMBA_project/files_processed/reptile_dataframe.xlsx"))
 
-
-
-
-
-#-----------------------------------------------------------------------------------#
-#  5. Data Preparation to visualize and analayse Reptiles above the treeline
-#------------------------------------------------------------------------------------#
-
-
-# Load the elevation data
-Data_reptiles <- readxl::read_excel(paste0(data_storage_path, "subm_global_alpine_biodiversity/Data/Reptiles/processed//Reptiles_Checklist_Elevations_DEM.xlsx")) |>
-  rename(min_elevation = min_elevation_validation)|>
-  rename(max_elevation = max_elevation_validation)
-
-# check for duplicates
-duplicates <- Data_reptiles|>
-  distinct(sciname, Mountain_range, Mountain_system, .keep_all = TRUE)
-
-# 
 #----------------------------------------------------------#
-# 5.2. Create Conditions which elevations are used for reptiles  ----
+# 6. Clean and sort for expert validation
 #----------------------------------------------------------#
-# If species occurs in one mountain system and has min and max elevation (GARD) - USE
-# If species occurs in one mountain system and has only min OR max (GARD) - Use GARD and respective other DEM
-# If species occurs in > one mountain system OR has NO min and max (GARD) USE DEM
 
-Data_reptiles <- Data_reptiles |>
-  # Add a column that counts the number of unique mountain systems per species
-  group_by(sciname) |>
-  mutate(unique_mountain_systems = n_distinct(Mountain_system)) |>
-  ungroup() |>
-  # Apply conditions
-  rowwise() |>
+reptile_dataframe_experts <- reptile_dataframe %>%
+  select(-c(overlap_area, overlap_pct, species_area)) %>%  # remove overlap info useless for experts
   mutate(
-    min_elevation_USE = case_when(
-      # If more than one mountain system, always use min_elev_DEM
-      unique_mountain_systems > 1 ~ min_elev_DEM,
-      # If only one mountain system and both elevations available
-      unique_mountain_systems == 1 & !is.na(min_elevation) & !is.na(max_elevation) ~ min_elevation,
-      # If only one mountain system and min available but max is not
-      unique_mountain_systems == 1 & !is.na(min_elevation) & is.na(max_elevation) ~ min_elevation,
-      # If only one mountain system and max available but min is not
-      unique_mountain_systems == 1 & is.na(min_elevation) & !is.na(max_elevation) ~ min_elev_DEM,
-      # Otherwise
-      TRUE ~ min_elev_DEM
-    ),
-    max_elevation_USE = case_when(
-      # If more than one mountain system, always use max_elev_DEM
-      unique_mountain_systems > 1 ~ max_elev_DEM,
-      # If only one mountain system and both elevations available
-      unique_mountain_systems == 1 & !is.na(min_elevation) & !is.na(max_elevation) ~ max_elevation,
-      # If only one mountain system and max available but min is not
-      unique_mountain_systems == 1 & is.na(max_elevation) & !is.na(min_elevation) ~ max_elev_DEM,
-      # If only one mountain system and min available but max is not
-      unique_mountain_systems == 1 & !is.na(max_elevation) & is.na(min_elevation) ~ max_elevation,
-      # Otherwise
-      TRUE ~ max_elev_DEM
-    )
-  ) |>
-  # drop the temporary columns
-  select(-unique_mountain_systems)|>distinct()
-
-#-----------------------------------------------------------------------------------------------------------------------------#
-# 5.2. Mutate the treeline elevations and calculate how much min elevation is below the treeline 
-#------------------------------------------------------------------------------------------------------------------------------#
-
-Treeline_Elevations <- readxl::read_excel(file.path(data_storage_path, "subm_global_alpine_biodiversity/Data/Mountains/Treeline_Lapse_Rate_04_05.xlsx"))
-
-# Join with treeline elevations
-Data_reptiles <- Data_reptiles|>
-  left_join(Treeline_Elevations,by = c("Mountain_range","Mountain_system"))|>
-  rename(Mean_elevation_treeline = Mean_elevation) |># calculate how much of species min and max limit is above and below the treeline
-  mutate(
-    min_rel_treeline = min_elevation_USE - Mean_elevation_treeline,
-    max_rel_treeline = max_elevation_USE - Mean_elevation_treeline
+    presence_corrected = "",
+    min_corrected = "",
+    max_corrected = "",
+    validated_elevation_data = "",
+    confidence_assessment = "",
+    reviewer_comments = ""
   )
-
-# The column to use now is min/max elevation USE
-species_richness_reptiles <- Data_reptiles |>
-  group_by(Mountain_range) |>
-  summarise(species_richness = n_distinct(sciname))
-
-#--------------------------------------------------#
-# 5.3. Mutate information about species endemism
-#---------------------------------------------------#
-
-Data_reptiles <- Data_reptiles |> 
-  group_by(sciname)|> 
-  mutate(unique_mountain_range = n_distinct(Mountain_range))|>
-  ungroup()|>
-  mutate(endemic = if_else(unique_mountain_range==1, "YES","NO"))
-
-
-
-
-
-#----------------------------------------------------------#
-# 6. 1. Set up  -----
-#----------------------------------------------------------#
-library(here)
-library(tidyverse)
-
-# Load configuration
-source(
-  here::here("R/00_Config_file.R")
-)
-
-
-# run the Data Preparation file 
-source(
-  here::here("R/01_Data_processing/03_Reptiles/04_00_reptile_data_prep_for:expert_validation.R")
-)
-
-# read in the maximum elevation
-max_elev <- readxl::read_excel(paste0(data_storage_path, "subm_global_alpine_biodiversity/Data/Mountains/GMBA_mountains_max_elevation.xlsx")) 
-
-# mutate the source of the elevational ranges
-Data_reptiles_experts <- Data_reptiles |>
-  mutate(
-    source_distribution_data = "Global Assessment of Reptile Distribution (GARD)",
-    source_reference = "Roll et. al. 2017 The global distribution of tetrapods reveals a need for targeted reptile conservation. Nature Ecology & Evolution 1:1677-1682",
-    source_min_elevation = case_when(
-      min_elevation_USE == min_elevation ~ "provided by Shai Meiri,GARD",
-      min_elevation_USE == min_elev_DEM ~ "extracted with DEM",
-      TRUE ~ NA_character_ 
-    ),
-    source_max_elevation = case_when(
-      max_elevation_USE == max_elevation ~ "provided by Shai Meiri, GARD",
-      max_elevation_USE == max_elev_DEM ~ "extracted with DEM",
-      TRUE ~ NA_character_ 
-    )
-  ) |>
-  left_join(max_elev,by="Mountain_range")|>
-  mutate(Mean_elevation_treeline = round(Mean_elevation_treeline, 0)) |>
-  select(
-    sciname, TaxonID, group, family, 
-    GMBA_ID, Mountain_system, Mountain_range,overlap_percentage_mountain,
-    min_elevation_USE, max_elevation_USE,
-    Mean_elevation_treeline,max_elevation_mountain_range,
-    source_distribution_data, source_reference, source_min_elevation, source_max_elevation)|>
-  rename(
-    min_elevation = min_elevation_USE,
-    max_elevation = max_elevation_USE,
-    overlap_perc_mountain_range = overlap_percentage_mountain,
-    mean_elevation_treeline = Mean_elevation_treeline
-  )|>
-  arrange(Mountain_range, desc(max_elevation), desc(overlap_perc_mountain_range))|>
-  mutate(
-    reviewer_comments = "",
-    reviewer_certainty = "",
-    reviewer_alpine =""
-  )
-
-
-
-
-#----------------------------------------------------------#
-# 7. 1. Set up  -----
-#----------------------------------------------------------#
-library(here)
-library(tidyverse)
-
-# Load configuration
-source(
-  here::here("R/00_Config_file.R")
-)
-
-#----------------------------------------------------------#
-# 7.1. Load data -----
-#----------------------------------------------------------#
-
-# read in the cleaned experts list
-
-expert_list_reptiles <- readxl::read_excel(paste0(data_storage_path, "Biodiversity_combined/Expert_validation/experts_list_cleaned.xlsx"))|>filter(group=="reptiles")
-
-
-# Load the Data Preparation file 
-source(
-  here::here("R/02_Main_analyses/Reptiles/00_Reptile_Data_Preparations.R")
-)
-
-# read in the maximum elevation
-max_elev <- readxl::read_excel(paste0(data_storage_path, "subm_global_alpine_biodiversity/Data/Mountains/GMBA_mountains_max_elevation.xlsx")) 
-
-# mutate the source of the elevational ranges
-Data_reptiles_experts <- Data_reptiles |>
-  mutate(
-    source_distribution_data = "Global Assessment of Reptile Distribution (GARD)",
-    source_reference = "Roll et. al. 2017 The global distribution of tetrapods reveals a need for targeted reptile conservation. Nature Ecology & Evolution 1:1677-1682",
-    source_min_elevation = case_when(
-      min_elevation_USE == min_elevation ~ "provided by Shai Meiri,GARD",
-      min_elevation_USE == min_elev_DEM ~ "extracted with DEM",
-      TRUE ~ NA_character_ 
-    ),
-    source_max_elevation = case_when(
-      max_elevation_USE == max_elevation ~ "provided by Shai Meiri, GARD",
-      max_elevation_USE == max_elev_DEM ~ "extracted with DEM",
-      TRUE ~ NA_character_ 
-    )
-  ) |>
-  left_join(max_elev,by="Mountain_range")|>
-  mutate(Mean_elevation_treeline = round(Mean_elevation_treeline, 0)) |>
-  select(
-    sciname, TaxonID, group, family, 
-    GMBA_ID, Mountain_system, Mountain_range,overlap_percentage_mountain,
-    min_elevation_USE, max_elevation_USE,
-    Mean_elevation_treeline,max_elevation_mountain_range,
-    source_distribution_data, source_reference, source_min_elevation, source_max_elevation)|>
-  rename(
-    min_elevation = min_elevation_USE,
-    max_elevation = max_elevation_USE,
-    overlap_perc_mountain_range = overlap_percentage_mountain,
-    mean_treeline = Mean_elevation_treeline
-  )|>
-  arrange(Mountain_range, desc(max_elevation), desc(overlap_perc_mountain_range))|>
-  mutate(mountain_range_corrected ="",
-         min_corrected = "",
-         max_corrected = "",
-         validated_elevation_data = "",
-         confidence_assessment = "",
-         alpine_status ="",
-         reviewer_comments = ""
-  )
-
-#-------------------------------------------------------------------#
-# filter mountain ranges where we do have experts ---
-#--------------------------------------------------------------------#
-
-# Get unique mountain ranges from df_mountain_ranges
-unique_mr <- expert_list_reptiles |> 
-  filter(!is.na(email))|>
-  distinct(mountain_range) |> 
-  pull(mountain_range)
-
-# Subset Data_birds_experts based on unique mountain ranges
-subset_reptiles <- Data_reptiles_experts |> 
-  filter(Mountain_range %in% unique_mr)
-
-## this part if you want to get the individual lists for all ranges (not only where we have experts for)
-# Get unique mountain ranges from df_mountain_ranges
-
-unique_mr <- Data_reptiles_experts |> 
-  distinct(Mountain_range) |> 
-  pull(Mountain_range)
-
-# Subset Data_birds_experts based on unique mountain ranges
-subset_reptiles <- Data_reptiles_experts |> 
-  filter(Mountain_range %in% unique_mr)
-
-#--------------------------------------------#
-# subset checklists to these mountain ranges---
-#---------------------------------------------#
-
-# Loop through each unique mountain range and save as Excel files
-for (range in unique_mr) {
-  # Replace slashes and spaces with underscores in the mountain range name
-  safe_range_name <- gsub("[ /]", "_", range)  # Replaces slashes and spaces with underscores
-  
-  # Subset
-  subset_range <- Data_reptiles_experts |>
-    filter(Mountain_range == range)
-  
-  # 
-  wb <- createWorkbook()
-  addWorksheet(wb, "Reptiles")
-  writeData(wb, "Reptiles", subset_range)
-  
-  # 
-  file_path <- paste0(data_storage_path, "Biodiversity_combined/Expert_validation/Checklists/Reptiles/all_lists/Reptiles_", safe_range_name, ".xlsx")
-  
-  # Save 
-  saveWorkbook(wb, file_path, overwrite = TRUE)
-}
-
-
