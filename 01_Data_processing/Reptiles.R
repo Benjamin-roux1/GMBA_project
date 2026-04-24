@@ -48,12 +48,10 @@ reptile_shapes <- reptile_shapes %>%
 #  2. Overlap Reptile ranges with GMBA shapefile
 #----------------------------------------------------------#
 
-# This script overlaps reptile distribution ranges with GMBA mountain ranges (level 03) and alpine biome 
-# The species range shps are partly very large files. Therefore, I process each group separately
-# There are 6 groups (see 00_Source_data_GARD)
+# This script overlaps reptile distribution ranges with GMBA mountain ranges (level 03) 
 
 #----------------------------------------------------------#
-# 2.2. Source gmba mountain and alpine biome shps   -----
+# 2.2. Source gmba mountains   -----
 #----------------------------------------------------------#
 
 #source the gmba regions
@@ -98,25 +96,12 @@ sf_use_s2(TRUE)
 # 2.3. Intersect species ranges with GMBA and calculate overlap (value in km2 and %) 
 #-----------------------------------------------------------------------------------------#
 
-# The function intersect_species_mountain ranges:
-# 1. creates bboxes for mountain ranges and for the species that is beeing processed. 
+# The function overlap.mountain:
+# 1. creates bboxes for mountain ranges 
 # 2. If sp and mountain bbox intersect 
 #   2.1. it takes the area of a species in km2 (is already in reptile dataset)
 #   2.2. the percentage of overlap of the species range with the mountain range 
 # 3. removes all species with < 5km2 and < 1% overlap with a GMBA Mountain range
-
-
-# To test function
-#reptile_shapes_filtered <- reptile_shapes[1:10,]
-#results_test <- overlap.mountain(mountain_shapes03, reptile_shapes_filtered)
-# visual check
-# subset your data
-#sahara <- mountain_shapes03 %>% filter(Level_03 == "Sahara Ranges")
-#rueppellii <- reptile_shapes %>% filter(binomial == "Ablepharus rueppellii")
-#ggplot() +
-  #geom_sf(data = sahara, fill = "orange", color = NA) +                   
-  #geom_sf(data = rueppellii, fill = "steelblue", alpha = 0.5, color = NA) +     
-  #theme_minimal()
 
 # Execute the main function
 results <- overlap.mountain(mountain_shapes03, reptile_shapes)
@@ -171,12 +156,19 @@ reptile_dataframe <- reptile_dataframe %>%
 #  4. Get elevations with DEM 
 #----------------------------------------------------------#
 
-# In this script I extract quartiles for species min and max elevations from their range shps using SRTMGL3
-# Shuttle Radar Topography Mission (SRTM GL3) Global 90m
-# https://portal.opentopography.org/raster?opentopoID=OTSRTM.042013.4326.1
+# This snippet extract the min and max elevational limits of each species in each mountain range
+# I use the Digital Elevation Model Copernicus GLO-90, with a resolution of 90m
+# https://portal.opentopography.org/raster?opentopoID=OTSDEM.032021.4326.1
+# European Space Agency (2024). Copernicus Global Digital Elevation Model. Distributed by OpenTopography. https://doi.org/10.5069/G9028PQB.
+
+# The procedure is the following:
+#   1. I estimate the average best quantiles to estimate ranges limits, i.e. the quantiles with the average 
+#     lowest deviation to the 'true limits' that we extracted from the litterature (see part 3)
+#   2. Based on these quantiles, I extract the elevational limits for each species x mountain range
+
 
 #----------------------------------------------------------#
-# 4.2. Load species data and set API key  -----
+# 4.2. Load species data 
 #----------------------------------------------------------#
 
 # From the dataframe with species selected for each mountain range, we add their range distribution as a new column
@@ -230,8 +222,8 @@ dem <- terra::rast(paste0(source_path, "GMBA_project/demMountains_GLO90.tif"))
 #----------------------------------------#
 # 4.2. Estimate the best quantile  -----
 #----------------------------------------#
-
-quantiles <- estimate.quantile(reptile_intersect, dem)
+overlap_treshold <- 20
+quantiles <- estimate.quantile(reptile_intersect, dem, overlap_treshold)
 
 ggplot(quantiles, aes(x = quantile)) +
   geom_col(aes(y = mean_dev_min, fill = "red", alpha = 0.5)) + 
