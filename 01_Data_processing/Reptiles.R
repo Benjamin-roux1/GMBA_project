@@ -297,7 +297,7 @@ reptiles_GBIF_elev <- reptiles_GBIF_elev %>%
 # Add GBIF elev to the base dataframe
 reptile_dataframe <- reptile_dataframe %>%
   left_join(reptiles_GBIF_elev, by = c("sciname", "Mountain_range"))
-
+ 
 #---------------------------#
 # 4.6. Save data -----
 #--------------------------#
