@@ -112,7 +112,7 @@ results <- overlap.mountain(mountain_shapes03, reptile_shapes)
 # failures_df contains species where an error occured
 
 reptile_success <- results$results
-results_failures <- results$failures
+reptile_failures <- results$failures
 
 # Let's create a base dataframe in which we will add the different columns throughout the process
 reptile_dataframe <- reptile_success
@@ -222,7 +222,9 @@ dem <- terra::rast(paste0(source_path, "GMBA_project/demMountains_GLO90.tif"))
 # 4.4. Estimate the best quantile  -----
 #----------------------------------------#
 
-quantiles <- estimate.quantile(reptile_intersect, dem)
+# Remember to choose an overlap threshold here
+overlap_treshold <- 20
+quantiles <- estimate.quantile(reptile_intersect, dem, overlap_treshold)
 
 ggplot(quantiles, aes(x = quantile)) +
   geom_col(aes(y = mean_dev_min, fill = "red", alpha = 0.5)) + 
@@ -236,11 +238,11 @@ ggplot(quantiles, aes(x = quantile)) +
 
 quantile_min <- quantiles %>%
   filter(quantile <= 0.49) %>%
-  filter(mean_abs_dev == min(mean_abs_dev))
+  filter(mean_dev_min == min(mean_dev_min))
 quantile_min
 quantile_max <- quantiles %>%
   filter(quantile >= 0.51) %>%
-  filter(mean_abs_dev == min(mean_abs_dev))
+  filter(mean_dev_max == min(mean_dev_max))
 quantile_max
 
 reptile_elevations_DEM <- extract.elevational.limits.DEM(reptile_intersect, dem, quantile_min, quantile_max)
@@ -289,6 +291,8 @@ reptile_GBIF <- reptile_GBIF %>%
 #---------------------------------------#
 # 5.2. Standardize species names -----
 #---------------------------------------#
+# We apply the gbif standardize tool here to both dataset
+
 species_names <- standardize.species.names(reptile_GBIF, reptile_mountain)
 GBIF_clean <- species_names$gbif
 reptile_clean <- species_names$litterature
