@@ -16,7 +16,7 @@
 library(here); library(data.table); library(dplyr)
 library(tidyverse); library(readxl); library(terra)
 library(sf); library(arrow); library(rgbif)
-
+  
 # Load configuration
 #source(
   #here::here("R/00_Config_file.R")
