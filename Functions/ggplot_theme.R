@@ -1,4 +1,4 @@
-theme_perso <- function(){            
+theme.perso <- function(){            
   theme_classic() +                          
     theme(axis.text.x = element_text(size = 12, angle = 45, vjust = 1, hjust = 1),       
           axis.text.y = element_text(size = 12),

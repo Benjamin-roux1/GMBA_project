@@ -1,5 +1,5 @@
 
-estimate.quantile <- function (species, dem) {
+estimate.quantile <- function (species, dem, overlap_threshold) {
   
   # Keep only species that have min & max elevational limits 
   species <- species %>%
@@ -7,7 +7,7 @@ estimate.quantile <- function (species, dem) {
   
   # Keep a subset of these species (e.g. only species that have >50% overlap)
   species <- species %>%
-    filter(overlap_pct > 10)
+    filter(overlap_pct > overlap_threshold)
   
   results_list <- vector("list", nrow(species))
   

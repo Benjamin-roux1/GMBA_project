@@ -108,12 +108,14 @@ overlap.mountain <- function(mountain_shapes, species_df) {
       
       # 6. store one row per species per MR
       results[[length(results) + 1]] <- data.frame(
-        sciname        = species$sciname,
+        sciname = species$sciname,
+        order = species$order,
+        family = species$family,
         Mountain_system = mountain$Level_02,
         Mountain_range = mountain$Level_03,
-        overlap_area   = round(overlap_area, 2),
-        overlap_pct    = overlap_pct,
-        species_area   = species_area
+        overlap_area = round(overlap_area, 2),
+        overlap_pct = overlap_pct,
+        species_area = species_area
       )
     }
     

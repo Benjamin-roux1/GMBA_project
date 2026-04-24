@@ -28,12 +28,12 @@ clean.names <- function(data, matched) {
 standardize.species.names <- function(gbif_data, litterature_data) {
   
   # 1. Match species names to GBIF backbone
-  matched_gbif <- match_backbone(gbif_data)
-  matched_litt <- match_backbone(litterature_data)
+  matched_gbif <- match.backbone(gbif_data)
+  matched_litt <- match.backbone(litterature_data)
   
   # 2. Clean and standardize names in both datasets
-  gbif_clean <- clean_names(gbif_data, matched_gbif)
-  litt_clean <- clean_names(litterature_data, matched_litt)
+  gbif_clean <- clean.names(gbif_data, matched_gbif)
+  litt_clean <- clean.names(litterature_data, matched_litt)
   
   # 3. Keep only species present in both datasets
   gbif_final <- gbif_clean %>%

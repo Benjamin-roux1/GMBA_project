@@ -138,9 +138,9 @@ ggplot() +
   geom_sf(data = mountain_shapes03, fill = "grey30", color = NA) +
   theme_minimal()
 
-# A bit of cleaning the dataframe
+# A bit of cleaning the mountain dataframe
 # some rows are not defined at Level03 or Level02
-# in these cases, we fill the NA with the closest filled superior level
+# in these cases, we fill the NA with the closest filled upper level
 {
   sf_use_s2(FALSE)
   mountain_shapes03 <- mountain_shapes03 %>%
@@ -239,40 +239,169 @@ birds_dataframe <- birds_dataframe %>%
 
 # In this script I extract quartiles for species min and max elevations from their range shps using DEM
 
-
--------------------------------------------------#
+#-------------------------------------------------#
 # 5.2. Load species data and set API key  -----
 #----------------------------------------------------------#
+# From the dataframe with species selected for each mountain range, we add their range distribution as a new column
+birds_mountain <- birds_dataframe %>%
+  left_join(birds_shapes_clean, by = "sciname")
+
+#-------------------------------------------------------------#
+# 4.2. Crop species distribution in each mountain range  -----
+#-------------------------------------------------------------#
+birds_mountain_sf <- st_as_sf(birds_mountain) %>%
+  st_make_valid()
+
+# Intersect for each row the species distribution with the corresponding mountain shp
+{
+  sf_use_s2(FALSE)
+  birds_intersect <- birds_mountain_sf %>%
+    rowwise() %>%
+    mutate(
+      geom = st_intersection(
+        geom,
+        mountain_shapes03 %>% 
+          filter(Level_03 == Mountain_range) %>% 
+          st_geometry()
+      )
+    ) %>%
+    ungroup()
+  sf_use_s2(TRUE)
+  }
+
+
+# Visual check of the cropping
+sp <- birds_intersect[1, ]
+bbox <- st_bbox(birds_mountain_sf %>% filter(sciname == sp$sciname))
+ggplot() +
+  geom_sf(data = mountain_shapes03, fill = NA, color = "grey50") +
+  geom_sf(data = birds_mountain_sf %>% filter(sciname == sp$sciname),  # Whole species range
+          fill = "lightblue", alpha = 0.4) + 
+  geom_sf(data = birds_intersect %>% filter(sciname == sp$sciname),  # Intersected species range
+          fill = "red", alpha = 0.6) +
+  coord_sf(xlim = c(bbox["xmin"], bbox["xmax"]), 
+           ylim = c(bbox["ymin"], bbox["ymax"])) +
+  theme_perso()
+
+# Now we have a dataframe with all the species and their distribution in each mountain ranges specifically
 
 
 #------------------------------------------------------------------------#
 # 5.4. Get birds elevational ranges with DEM -----
 #-------------------------------------------------------------------------#
 
-# Define the focus GMBA systems 
-Focus_GMBA_systems<-unique(Checklist_Elev_DEM$Mountain_system)
+##------------------------------#
+# 4.2. Add the DEM  -----
+#------------------------------#
+dem <- terra::rast(paste0(source_path, "GMBA_project/demMountains_GLO90.tif"))
 
-# Validate the shapes in the df to process
-Checklist_Elev_DEM<- validate_shapes_individually(Checklist_Elev_DEM)
+#----------------------------------------#
+# 4.2. Estimate the best quantile  -----
+#----------------------------------------#
 
+# Remember to choose an overlap threshold here
+overlap_treshold <- 20
+quantiles <- estimate.quantile(birds_intersect, dem, overlap_treshold)
 
-# This is the old function from the mammal workflow --> new one has to be refined
-results_dem_df <- extract_elevational_ranges(Checklist_Elev_DEM, Focus_GMBA_systems)
+quantile_min <- quantiles %>%
+  filter(quantile <= 0.49) %>%
+  filter(mean_dev_min == min(mean_dev_min))
+quantile_min
+quantile_max <- quantiles %>%
+  filter(quantile >= 0.51) %>%
+  filter(mean_dev_max == min(mean_dev_max))
+quantile_max
 
+quantiles %>%
+  pivot_longer(cols = c(mean_dev_min, mean_dev_max),
+               names_to = "type",
+               names_prefix = "mean_dev_",
+               values_to = "mean_dev") %>%
+  ggplot(aes(x = quantile, y = mean_dev, fill = type)) +
+  geom_col(alpha = 0.5, position = "identity") +
+  geom_vline(xintercept = quantile_min$quantile, color = "blue", linewidth = 0.8, linetype = "dashed") +
+  geom_vline(xintercept = quantile_max$quantile, color = "red", linewidth = 0.8, linetype = "dashed") +
+  theme_minimal()
 
-# Bind the dataframes togeher
-results_dem_df_b <- Checklist_Elev_DEM|> 
-  left_join(results_dem_df,by=c("sciname","Mountain_range","Mountain_system"))|>
-  rename(max_elevation_validation = max_elevation)|>
-  rename(min_elevation_validation = min_elevation)|>
-  sf::st_as_sf(results_dem_df_b)|> 
-  sf::st_set_geometry(NULL)
+#------------------------------------------------------------------------#
+# 4.4. Get birds elevational ranges with DEM -----
+#-------------------------------------------------------------------------#
 
-results_dem_df_b <- results_dem_df_b|> 
-  sf::st_set_geometry(NULL)
+birds_elevations_DEM <- extract.elevational.limits.DEM(birds_intersect, dem, quantile_min, quantile_max)
+
+birds_dataframe <- birds_dataframe %>%
+  left_join(birds_elevations_DEM, by = c("sciname", "Mountain_range"))
+
+#------------------------------------------------------------------------#
+# 4.4. Get birds elevational ranges with GBIF -----
+#-------------------------------------------------------------------------#
+
+# Import GBIF dataset
+birds_GBIF <- arrow::open_dataset(paste0(source_path, "GBIF_data/data/Aves_parquetclean"))
+
+# -----------
+# TAKE A SUBSET (TO BE REMOVED) 
+# The dataset is huge, so I first collect the species list and sample 50 of them
+species_sample <- birds_GBIF %>%
+  distinct(species) %>%
+  collect() %>%          
+  slice_sample(n = 50) %>%
+  pull(species)
+
+# Then I filter the GBIF dataset with this 50 species
+birds_GBIF <- birds_GBIF %>%
+  filter(species %in% species_sample) %>%
+  dplyr::select(species, decimalLatitude, decimalLongitude, Level_01, Level_02,
+                Level_03) %>%
+  collect()
+# -----------
+
+birds_GBIF <- birds_GBIF %>%
+  rename(sciname = "species")
+
+# Fill empty Level_03 by the Level_02 or Level_01
+birds_GBIF <- birds_GBIF %>%
+  mutate(
+    Level_03 = coalesce(Level_03, Level_02, Level_01),
+    Level_02 = coalesce(Level_02, Level_01))
+
+# ---- Standardize species names
+species_names <- standardize.species.names(birds_GBIF, birds_mountain)
+GBIF_clean <- species_names$gbif
+birds_clean <- species_names$litterature
+
+birds_GBIF_elev <- extract.elevational.limits.GBIF(GBIF_clean, dem)
+
+# A bit of cleaning
+birds_GBIF_elev <- birds_GBIF_elev %>%
+  rename(Mountain_range = "Level_03")
+
+# Add GBIF elev to the base dataframe
+birds_dataframe <- birds_dataframe %>%
+  left_join(birds_GBIF_elev, by = c("sciname", "Mountain_range"))
+
 #---------------------------#
-# 5.6. Save data -----
+# 4.6. Save data -----
 #--------------------------#
 
-# write the individual chunks
-writexl::write_xlsx(results_dem_df_b, data_storage_path, "subm_global_alpine_biodiversity/Data/Birds/processed/Birds_Checklist_Elevations_DEM_16001_19617.xlsx")
+# Save the file
+writexl::write_xlsx(birds_dataframe, paste0(source_path, "GMBA_project/files_processed/birds_dataframe.xlsx"))
+
+#----------------------------------------------------------#
+# 6. Clean and sort for expert validation
+#----------------------------------------------------------#
+
+birds_dataframe_experts <- birds_dataframe %>%
+  select(-c(overlap_area, overlap_pct, species_area)) %>%  # remove overlap info useless for experts
+  mutate(
+    presence_corrected = "",
+    min_corrected = "",
+    max_corrected = "",
+    validated_elevation_data = "",
+    confidence_assessment = "",
+    reviewer_comments = ""
+  )
+
+# Save the file
+writexl::write_xlsx(birds_dataframe_experts, paste0(source_path, "GMBA_project/files_processed/birds_expert.xlsx"))
+
