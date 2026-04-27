@@ -258,11 +258,6 @@ reptile_dataframe <- reptile_dataframe %>%
 # https://portal.opentopography.org/raster?opentopoID=OTSDEM.032021.4326.1
 # European Space Agency (2024). Copernicus Global Digital Elevation Model. Distributed by OpenTopography. https://doi.org/10.5069/G9028PQB.
 
-# The procedure is the following:
-#   1. I estimate the average best quantiles to estimate ranges limits, i.e. the quantiles with the average 
-#     lowest deviation to the 'true limits' that we extracted from the litterature (see part 3)
-#   2. Based on these quantiles, I extract the elevational limits for each species x mountain range
-
 #----------------------------------------#
 # 5.1. Import & clean GBIF dataset ----
 #----------------------------------------#
