@@ -10,9 +10,9 @@
 
 #Caetano, et al. 2022. Automated assessment reveals that the extinction risk of reptiles is widely underestimated across space and phylogeny. PLoS Biology, 20(5): e3001544.
 
-#----------------------------------------------------------#
-# 1.1. Set up  -----
-#----------------------------------------------------------#
+#-----------------------------#
+# ----- 1.1. Set up
+#-----------------------------#
 library(here); library(data.table); library(dplyr)
 library(tidyverse); library(readxl); library(terra)
 library(sf); library(arrow); library(rgbif)
@@ -45,14 +45,14 @@ reptile_shapes <- reptile_shapes %>%
   rename(sciname = binomial)
 
 #----------------------------------------------------------#
-#  2. Overlap Reptile ranges with GMBA shapefile
+#  ------ 2. Overlap Reptile ranges with GMBA shapefile
 #----------------------------------------------------------#
 
 # This script overlaps reptile distribution ranges with GMBA mountain ranges (level 03) 
 
-#----------------------------------------------------------#
-# 2.2. Source gmba mountains   -----
-#----------------------------------------------------------#
+#-----------------------------------------#
+# 2.1. Source gmba mountains -----
+#-----------------------------------------#
 
 #source the gmba regions
 mountain_shapes <- sf::st_read(paste0(source_path, "GMBA_project/GMBA_mountains/GMBA_Inventory_v2.0_standard_300/GMBA_Inventory_v2.0_standard_300.shp")) %>%
@@ -93,7 +93,7 @@ sf_use_s2(TRUE)
 }
 
 #----------------------------------------------------------------------------------------#
-# 2.3. Intersect species ranges with GMBA and calculate overlap (value in km2 and %) 
+# 2.2. Intersect species ranges with GMBA and calculate overlap (value in km2 and %) 
 #-----------------------------------------------------------------------------------------#
 
 # The function overlap.mountain:
@@ -110,14 +110,14 @@ results <- overlap.mountain(mountain_shapes03, reptile_shapes)
 # results_df contains all species that have succesfully been processed
 # failures_df contains species where an error occured
 
-reptile_success <- results$results
-results_failures <- results$failures
+reptile_success <- results$results_df
+results_failures <- results$failures_df
 
 # Let's create a base dataframe in which we will add the different columns throughout the process
 reptile_dataframe <- reptile_success
 
 #----------------------------------------------------------#
-#  3. Bind Elevations to Species 
+#  ----- 3. Bind Elevations to Species 
 #----------------------------------------------------------#
 
 # This script binds elevation data to species names (GARD)
@@ -125,7 +125,7 @@ reptile_dataframe <- reptile_success
 # https://onlinelibrary.wiley.com/doi/10.1111/geb.13812 
 
 #----------------------------------------------------------#
-# 3.2. Load data -----
+# 3.1. Load data -----
 #----------------------------------------------------------#
 
 # Load the elevation data
@@ -138,9 +138,9 @@ elevation_data <- read_excel(paste0(source_path, "GMBA_project/Raw_datasets/Rept
 # Change column type of elevation limits to numeric
 elevation_data[, 2:3] <- lapply(elevation_data[, 2:3], as.numeric)
 
-#----------------------------------------------------------#
-# 3.3. Left join data -----
-#----------------------------------------------------------#
+#--------------------------------#
+# 3.2. Left join data -----
+#--------------------------------#
 
 # Add extracted range limits to our base dataframe
 reptile_dataframe <- reptile_dataframe %>%
@@ -153,7 +153,7 @@ reptile_dataframe <- reptile_dataframe %>%
 
 
 #----------------------------------------------------------#
-#  4. Get elevations with DEM 
+#  ------- 4. Get elevations with DEM 
 #----------------------------------------------------------#
 
 # This snippet extract the min and max elevational limits of each species in each mountain range
@@ -168,7 +168,7 @@ reptile_dataframe <- reptile_dataframe %>%
 
 
 #----------------------------------------------------------#
-# 4.2. Load species data 
+# 4.1. Load species data  ------
 #----------------------------------------------------------#
 
 # From the dataframe with species selected for each mountain range, we add their range distribution as a new column
@@ -215,12 +215,12 @@ ggplot() +
 # Now we have a dataframe with all the species and their distribution in each mountain ranges specifically
 
 #------------------------------#
-# 4.2. Add the DEM  -----
+# 4.3. Add the DEM  -----
 #------------------------------#
 dem <- terra::rast(paste0(source_path, "GMBA_project/demMountains_GLO90.tif"))
 
 #----------------------------------------#
-# 4.2. Estimate the best quantile  -----
+# 4.4. Estimate the best quantile  -----
 #----------------------------------------#
 overlap_treshold <- 20
 quantiles <- estimate.quantile(reptile_intersect, dem, overlap_treshold)
@@ -231,9 +231,9 @@ ggplot(quantiles, aes(x = quantile)) +
   theme_minimal()
 
 
-#------------------------------------------------------------------------#
-# 4.4. Get reptile elevational ranges with DEM -----
-#-------------------------------------------------------------------------#
+#-------------------------------------------------------#
+# 4.5. Get reptile elevational ranges with DEM -----
+#-------------------------------------------------------#
 
 quantile_min <- quantiles %>%
   filter(quantile <= 0.49) %>%
@@ -250,10 +250,23 @@ reptile_dataframe <- reptile_dataframe %>%
   left_join(reptile_elevations_DEM, by = c("sciname", "Mountain_range"))
 
 #------------------------------------------------------------------------#
-# 4.4. Get reptile elevational ranges with GBIF -----
+# ------ 5. Get reptile elevational ranges with GBIF
 #-------------------------------------------------------------------------#
 
-# Import GBIF dataset
+# This snippet extract the min and max elevational limits of each species in each mountain range
+# I use the Digital Elevation Model Copernicus GLO-90, with a resolution of 90m
+# https://portal.opentopography.org/raster?opentopoID=OTSDEM.032021.4326.1
+# European Space Agency (2024). Copernicus Global Digital Elevation Model. Distributed by OpenTopography. https://doi.org/10.5069/G9028PQB.
+
+# The procedure is the following:
+#   1. I estimate the average best quantiles to estimate ranges limits, i.e. the quantiles with the average 
+#     lowest deviation to the 'true limits' that we extracted from the litterature (see part 3)
+#   2. Based on these quantiles, I extract the elevational limits for each species x mountain range
+
+#----------------------------------------#
+# 5.1. Import & clean GBIF dataset ----
+#----------------------------------------#
+
 reptile_GBIF <- arrow::open_dataset(paste0(source_path, "GBIF_data/data/Squamata_parquetclean"))
 
 # Collect Parquet dataset to R
@@ -275,10 +288,29 @@ reptile_GBIF <- reptile_GBIF %>%
     Level_03 = coalesce(Level_03, Level_02, Level_01),
     Level_02 = coalesce(Level_02, Level_01))
 
-# ---- Standardize species names
+#----------------------------------------#
+# 5.2. Standardize species names ----
+#----------------------------------------#
+
+# Here, we use the function rgbif::name_backbone_checklist to standardize both GBIF and litterature with the same procedure
+# The function standardize.species.names() follow the following procedure:
+#   1. for both gbif and litterature species list, it return a dataframe with original names and corrected names
+#   2. in both dataset, it removes the species names flagged as unsufficiently accurate
+#   3. in both dataset, it replaces the original species names by the "true ones" from the rgbif function
+#   4. then it join both dataset, keeping in the gbif dataset only species found in the litterature
+
+# The return is the gbif cleaned version, with standardized species names and only species found in our litterature dataset
+
 species_names <- standardize.species.names(reptile_GBIF, reptile_mountain)
 GBIF_clean <- species_names$gbif
 reptile_clean <- species_names$litterature
+
+#----------------------------------------#
+# 5.3. Extract elevational limits ----
+#----------------------------------------#
+# This function simply extract elevational limits from GBIF occurrences
+#   1. extract the elevation for each occurrences based on latitude and longitude coordinates
+#   2. group by species and mountain range (Level_03) and calculate the quantiles 0.05 and 0.95 to extract min and max elevational limits
 
 reptiles_GBIF_elev <- extract.elevational.limits.GBIF(GBIF_clean, dem)
 
@@ -291,14 +323,14 @@ reptile_dataframe <- reptile_dataframe %>%
   left_join(reptiles_GBIF_elev, by = c("sciname", "Mountain_range"))
  
 #---------------------------#
-# 4.6. Save data -----
+# 5.4. Save data -----
 #--------------------------#
 
 # Save the file
 writexl::write_xlsx(reptile_dataframe, paste0(source_path, "GMBA_project/files_processed/reptile_dataframe.xlsx"))
 
 #----------------------------------------------------------#
-# 6. Clean and sort for expert validation
+# ----- 6. Clean and sort for expert validation
 #----------------------------------------------------------#
 
 reptile_dataframe_experts <- reptile_dataframe %>%
