@@ -1,5 +1,24 @@
+# Function to intersect species ranges with mountain ranges and calculate overlap (value in km2 and %) 
+
+# The function overlap.mountain:
+# 1. Process by mountain range
+#   2. creates a bbox around the mountain range
+#   3. select the species that cross this bbox (first coarse filter)
+#     4. Process by species (for each species crossing the mountain range) 
+#     5. calculate the area of the species in km2 
+#     6. calculate the percentage of overlap of the species range with the mountain range 
+#   7. removes all species with < 5km2 and < 1% overlap with a GMBA Mountain range
+
+# We chose these threshold to avoid excluding false negative, i.e. be as much inclusive as possible. 
+# With the 5km2, we make sure to select even small ranges species, common in mountain areas, and for very small ranges
+# species, i.e. < 5km2, we set a threshold at 1% to make sure to include them as well.
 
 overlap.mountain <- function(mountain_shapes, species_df) {
+  
+  # Add genus column if missing. Little trick because reptiles doesnt have a genus column.
+  if (!"genus" %in% names(species_df)) {
+    species_df$genus <- NA_character_
+  }
   
   sf::sf_use_s2(FALSE)
   on.exit(sf::sf_use_s2(TRUE))
@@ -109,7 +128,7 @@ overlap.mountain <- function(mountain_shapes, species_df) {
       # 6. store one row per species per MR
       results[[length(results) + 1]] <- data.frame(
         sciname = species$sciname,
-        order = species$order,
+        genus = species$genus,
         family = species$family,
         Mountain_system = mountain$Level_02,
         Mountain_range = mountain$Level_03,
@@ -133,7 +152,7 @@ overlap.mountain <- function(mountain_shapes, species_df) {
   ))
   
   return(list(
-    results  = results_df,
-    failures = failures_df
+    results_df  = results_df,
+    failures_df = failures_df
   ))
 }

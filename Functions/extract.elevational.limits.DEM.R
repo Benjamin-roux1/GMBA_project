@@ -1,3 +1,8 @@
+# Function to extract elevational limits from the DEM.
+
+# 1. Crop the DEM to each row (= species x mountain range)
+# 2. Using the "best" quantiles estimated earlier, we calculate the estimated min and max elevation of the species in this MR
+
 extract.elevational.limits.DEM <- function (species, dem, quantile_min, quantile_max) {
   
   results_list <- vector("list", nrow(species))

@@ -1,3 +1,17 @@
+# Function to estimate the "best" quantiles to compute species elevational limits with a DEM
+
+# 1. Keep only species with "true" min and max elevational limits already found in the literature.
+# 2. Within these species, keep only the ones with an overlap % > 50.
+# 3. Then, for each row (= one species in one mountain range), crop the DEM
+#   --> 4. Estimate the quantile of elevation from 0.01 to 0.99.
+#   --> 5. Calculate the deviation of each quantile with the true limits
+# 6. Average the deviation for each quantile across all species and mountain ranges
+
+# LOGIC: Because we compare mountain specific limits (extracted from the DEM for each mountain range) with "true" elevational limits that are 
+# species specific but not mountain specific, we can have strong mismatches for widespread species. Therefore, we add a safety check
+# with the overlap_pct argument, only selecting in this process species with an overlap percentage > 50%, to ensure that the species is
+# specific to this mountain range or to this area (i.e. can include neighbouring mountain ranges).
+
 
 estimate.quantile <- function (species, dem, overlap_threshold) {
   
@@ -17,12 +31,16 @@ estimate.quantile <- function (species, dem, overlap_threshold) {
     # get "true" limits for this species
     true_min <- species[i, ]$min_elevation
     true_max <- species[i, ]$max_elevation
-    range_size <- true_max - true_min
-    
+
     # Crop DEM to species x mountain area 
     dem_crop <- terra::crop(dem, terra::vect(species[i, ]))
     dem_mask <- terra::mask(dem_crop, terra::vect(species[i, ]))
     elev_values <- terra::values(dem_mask, na.rm = TRUE)
+    
+    if (length(elev_values) == 0) {
+      message("No elevation values for row ", i, " — skipping")
+      next
+    }
     
     # Estimate the quantiles of elevation
     all_quantiles <- quantile(elev_values, probs = seq(0.01, 0.99, by = 0.01)) 
