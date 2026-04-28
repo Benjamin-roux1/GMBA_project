@@ -1,19 +1,16 @@
+##------------------------------------------------------
+#----- 1. Source Mammal distribution Data from MDD
+##------------------------------------------------------
 
-# ---------------------------------------------------#
-#  1. Source Mammal distribution Data from MDD
-# ----------------------------------------------------#
-
-# This script unpacks and opens zip folders containing gpkg for all mammals 
+# This snippet unpacks and opens zip folders containing gpkg for all mammals 
 # zips can be downloaded via the Mammal Diversity Database: https://www.mammaldiversity.org/assets/data/MDD.zip
 
-# There are some large files --> processing each order separately
-
-#----------------------------------------------------------#
+##---------------------
 # 1.1 Set up  -----
-#----------------------------------------------------------#
+##---------------------
 library(here); library(data.table); library(dplyr)
 library(tidyverse); library(readxl); library(terra)
-library(sf); library(arrow); library(rgbif)
+library(sf); library(arrow); library(rgbif); library(writexl)
 
 # Load configuration
 #source(
@@ -27,9 +24,9 @@ source_path <- "C:/Users/berou1714/OneDrive - Norwegian University of Life Scien
 list.files(path = paste0(source_path, "GMBA_project/Functions"), pattern = "*.R", full.names = TRUE) %>%
   purrr::walk(source)
 
-#----------------------------------------------------------#
+##--------------------------------------------------------
 # 1.2 Unzip folder containing range shapefiles  -----
-#----------------------------------------------------------#
+##--------------------------------------------------------
 
 # First, let's have a look at the organization of the folders and dataframe
 
@@ -46,20 +43,20 @@ unzip(zip_file, files = gpkg_file, exdir = tempdir())
 mammals <- sf::st_read(file.path(tempdir(), gpkg_file), quiet = TRUE)
 head(mammals)
 
-# These files are heavy. Everytime we will need the geometry (crop, DEM), we will loop over the orders.
+# These files are heavy. Every time we will need the geometry (crop, DEM), we will loop over the orders.
 
-# ----------------------------------------------------------#
-# 2. Overlap Mammal ranges with GMBA shapefile
-# ----------------------------------------------------------#
+##----------------------------------------------------------
+#  ----- 2. Overlap Mammal ranges with GMBA shapefile
+##----------------------------------------------------------
 
-# This script overlaps mammal distribution ranges with GMBA mountain ranges (level 03) and alpine biome 
-# in the end the geometries of the species a checklist is saved with each order as seperate sheet. 
+# This script overlaps mammal distribution ranges with GMBA mountain ranges (level 03)
+# in the end, we have a dataframe with one row per species per mountain range and the % of overlap 
 
-# ❗ The species range shps are partly very large files. Therefore, I process each order seperately
+# ❗The species range shps are partly very large files. Therefore, we process each order separately
 
-#----------------------------------------------------------#
-# 2.3 Source gmba mountain and alpine biome shps   -----
-#----------------------------------------------------------#
+##------------------------------------------
+# 2.1 Source & clean gmba mountain   -----
+##------------------------------------------
 
 #source the gmba regions
 mountain_shapes <- sf::st_read(paste0(source_path, "GMBA_project/GMBA_mountains/GMBA_Inventory_v2.0_standard_300/GMBA_Inventory_v2.0_standard_300.shp")) %>%
@@ -99,11 +96,11 @@ ggplot() +
   sf_use_s2(TRUE)
   }
 
-#----------------------------------------------------------------------------------------#
-# 2.4. Intersect species ranges with GMBA and calculate % of overlap -----
-#-----------------------------------------------------------------------------------------#
+##--------------------------------------------------------------------------
+# 2.2. Intersect species ranges with GMBA and calculate % of overlap -----
+##--------------------------------------------------------------------------
 # We are going to loop over each order separately, instead of loading them all on R
-# So for each order, which is zipped file, we first unzip it and then process
+# So for each order, which correspond to a zipped file, we first unzip it and then process
 
 # Source to the folder with all the zipped files and make it a list of files
 zip_folder <- paste0(source_path, "GMBA_project/Raw_datasets/Mammals/MDD_Mammalia/TEST/")
@@ -133,26 +130,30 @@ for (zip_file in zip_files) {     # HERE START THE LOOP
                                   quiet = TRUE)
 
 
-# The function intersect_species_mountain ranges:
-# 1. creates bboxes for mountain ranges and for the species that is beeing processed. 
-# 2. If sp and mountain bbox intersect 
-#   2.1. it calculates the area of a species in km2
-#   2.2. the percentage of overlap of the species range with the mountain range 
-#   2.3. the percentage of overlap with the alpine biome in that mountain range
-# 3. removes all species with < 1% overlap with a GMBA Mountain range
+    # The function overlap.mountain:
+    # 1. creates bboxes for mountain ranges 
+    # 2. If sp and mountain bbox intersect 
+    #   2.1. it takes the area of a species in km2 (is already in reptile dataset)
+    #   2.2. the percentage of overlap of the species range with the mountain range 
+    # 3. removes all species with < 5km2 and < 1% overlap with a GMBA Mountain range
+    
+    # We chose these threshold to avoid excluding false negative, i.e. be as much inclusive as possible. 
+    # With the 5km2, we make sure to select even small ranges species, common in mountain areas, and for very small ranges
+    # species, i.e. < 5km2, we set a threshold at 1% to make sure to include them as well.
+    
 
     results <- overlap.mountain(mountain_shapes03, mammals_shapes)
 
-# Result is a list with two dataframes:
-# results_df contains all species that have succesfully been processed
-# failures_df contains species where an error occured
+    # results is a list with two dataframes:
+    # results_df contains all species that have succesfully been processed
+    # failures_df contains species where an error occured
 
     # Store results, adding order name for traceability
-    if (!is.null(results$results)) {
-      all_results[[order_name]] <- results$results
+    if (!is.null(results$results_df)) {
+      all_results[[order_name]] <- results$results_df
     }
-    if (!is.null(results$failures)) {
-      all_failures[[order_name]] <- results$failures
+    if (!is.null(results$failures_df)) {
+      all_failures[[order_name]] <- results$failures_df
     }
   }
 }    # HERE END THE LOOP
@@ -163,9 +164,9 @@ mammals_dataframe <- dplyr::bind_rows(all_results)
 mammals_failures  <- dplyr::bind_rows(all_failures)
 
 
-#--------------------------------------------------------------#
-#  4. Clean the data from Handbook of Mammals 
-#--------------------------------------------------------------#
+##-------------------------------------------------------------
+#  ----- 3. Clean the data from Handbook of Mammals 
+##-------------------------------------------------------------
 
 # Physical copies of Handbook of the Mammals of the World available at
 # https://github.com/jhpoelen/hmw
@@ -173,20 +174,18 @@ mammals_failures  <- dplyr::bind_rows(all_failures)
 # This script cleans textual information from the handbook of mammals to min and max elevational ranges for mammals. 
 
 # ❗ ATTENTION !! the functions below do not clean HMW completely. there are still elevationa data that can not be grasped by the functions
-# after running this script the cleaning of the output file has been finalized manually
 
-
-#------------------------#
-# 4.2. Download the data
-#-------------------------#
+##------------------------------
+# 3.1. Download the data -----
+##------------------------------
 
 # This is the single files combined
 url <- "https://raw.githubusercontent.com/jhpoelen/hmw/main/hmw.csv"
 hmw_data <- read.csv(url)
 
-#----------------------------------#
-# 4.3. Filter and clean HMW
-#----------------------------------#
+##----------------------------------
+# 3.2. Filter and clean HMW -----
+##----------------------------------
 hmw_data <- hmw_data %>%
   rename(sciname = "name")
 
@@ -199,9 +198,9 @@ hmw_clean <- hmw_matched %>%
   select(sciname, habitat) %>%
   distinct(sciname,.keep_all = TRUE)
 
-#-------------------------------------------------------#
-# 4.4. first clean out the common typos
-#-------------------------------------------------------#
+##-----------------------------------------------
+# 3.3. first clean out the common typos -----
+##-----------------------------------------------
 
 # common patterns numbers
 pattern <- "(\\w+\\s+){0,5}(\\d+\\s*\\-?\\s*\\d*\\s*m)(\\s+\\w+){0,5}"
@@ -221,21 +220,21 @@ hmw_clean <- hmw_clean |>
   mutate(habitat = str_replace_all(habitat, regex("of(\\d+)\\s*m"), "of number m"))
 # cleaned info from 'habitat'
 
-#--------------------------------------------------------------------#
-# 4.5. Cleaning the elevations out of the habitat column 
-#---------------------------------------------------------------------#
+##-----------------------------------------------------------------
+# 3.4. Cleaning the elevations out of the habitat column -----
+##-----------------------------------------------------------------
 
 extract_elevation <- function(elevation_info) {
   
   # --- STEP 1: range pattern like 1000-1500m or 1000 - 1500 m ---
-  range_pattern <- "(\\d+)\\s*-\\s*(\\d+)\\s*m(?!m)"  # ✅ (?!m) excludes "mm"
+  range_pattern <- "(\\d+)\\s*-\\s*(\\d+)\\s*m(?!m)"
   range_match <- str_match(elevation_info, range_pattern)
   
   if (!is.na(range_match[1])) {
     num1 <- as.numeric(range_match[2])
     num2 <- as.numeric(range_match[3])
     
-    # ✅ Security: difference must be > 100m
+    # security: difference must be > 100m
     if (abs(num1 - num2) < 100) {
       return(tibble(min_elevation = NA_real_, max_elevation = NA_real_))
     }
@@ -250,13 +249,13 @@ extract_elevation <- function(elevation_info) {
   }
   
   # --- STEP 2: two separate elevations like "1000 m ... 1500 m" ---
-  separate_pattern <- "(\\d+)\\s*m(?!m)"  # ✅ (?!m) excludes "mm"
+  separate_pattern <- "(\\d+)\\s*m(?!m)"
   separate_matches <- str_match_all(elevation_info, separate_pattern)[[1]]
   
   if (nrow(separate_matches) >= 2) {
     nums <- as.numeric(separate_matches[, 2])
     
-    # ✅ Security: difference must be > 100m
+    # security: difference must be > 100m
     if (abs(max(nums) - min(nums)) < 100) {
       return(tibble(min_elevation = NA_real_, max_elevation = NA_real_))
     }
@@ -283,19 +282,14 @@ hmw_elevation <- hmw_clean |>
   tidyr::unnest(cols = c(elevation_data)) %>%
   select(- habitat)
 
-#---------------------------------------------------------------------------------#
-#  5. Match the cleaned Handbook of Mammals Dataset with MDD checklist
-#--------------------------------------------------------------------------------#
 
-# This script loads the cleaned handbook of mammals and the checklist (with overlaps mountain ranges) 
-# and joins the available data by species names
-
+# Match the cleaned Handbook of Mammals Dataset with MDD checklist
 mammals_dataframe <- mammals_dataframe %>%
   left_join(hmw_elevation, by = "sciname")
 
-#----------------------------------------------------------#
-# 7. Get elevations with DEM 
-#----------------------------------------------------------#
+##----------------------------------------------------------
+# ----- 4. Get elevations with DEM 
+##----------------------------------------------------------
 
 # This snippet extract the min and max elevational limits of each species in each mountain range
 # I use the Digital Elevation Model Copernicus GLO-90, with a resolution of 90m
@@ -304,8 +298,13 @@ mammals_dataframe <- mammals_dataframe %>%
 
 # The procedure is the following:
 #   1. I estimate the average best quantiles to estimate ranges limits, i.e. the quantiles with the average 
-#     lowest deviation to the 'true limits' that we extracted from the litterature (see part 3)
+#     lowest deviation to the 'true limits' that we extracted from the literature (see part 3)
 #   2. Based on these quantiles, I extract the elevational limits for each species x mountain range
+
+# LOGIC: Because we compare mountain specific limits (extracted from the DEM for each mountain range) with "true" elevational limits that are 
+# species specific but not mountain specific, we can have strong mismatches for widespread species. Therefore, we add a safety check
+# with the overlap_pct argument, only selecting in this process species with an overlap percentage > 50%, to ensure that the species is
+# specific to this mountain range or to this area (i.e. can include neighbouring mountain ranges).
 
 
 
@@ -390,38 +389,33 @@ mammals_dataframe <- mammals_dataframe %>%
   left_join(dplyr::bind_rows(all_results), by = c("sciname", "Mountain_range"))
 
 
-#------------------------------------------------------------------------#
+##----------------------------------------------------------
 # ----- 5. Get mammals elevational ranges with GBIF 
-#-------------------------------------------------------------------------#
+##----------------------------------------------------------
 
 # This snippet extract the min and max elevational limits of each species in each mountain range
 # I use the Digital Elevation Model Copernicus GLO-90, with a resolution of 90m
 # https://portal.opentopography.org/raster?opentopoID=OTSDEM.032021.4326.1
 # European Space Agency (2024). Copernicus Global Digital Elevation Model. Distributed by OpenTopography. https://doi.org/10.5069/G9028PQB.
 
-# The procedure is the following:
-#   1. I estimate the average best quantiles to estimate ranges limits, i.e. the quantiles with the average 
-#     lowest deviation to the 'true limits' that we extracted from the litterature (see part 3)
-#   2. Based on these quantiles, I extract the elevational limits for each species x mountain range
-
-#--------------------------------#
+##--------------------------------
 # 5.1. Import GBIF dataset -----
-#--------------------------------#
+##--------------------------------
 
 mammals_GBIF <- arrow::open_dataset(paste0(source_path, "GBIF_data/data/Squamata_parquetclean"))
 
 # -----------
 # TAKE A SUBSET (TO BE REMOVED) 
 # The dataset is huge, so I first collect the species list and sample 50 of them
-species_sample <- mammals_GBIF %>%
-  distinct(species) %>%
-  collect() %>%          
-  slice_sample(n = 50) %>%
-  pull(species)
+#species_sample <- mammals_GBIF %>%
+  #distinct(species) %>%
+  #collect() %>%          
+  #slice_sample(n = 50) %>%
+  #pull(species)
 
 # Then I filter the GBIF dataset with this 50 species
 mammals_GBIF <- mammals_GBIF %>%
-  filter(species %in% species_sample) %>%
+  #filter(species %in% species_sample) %>%
   dplyr::select(species, decimalLatitude, decimalLongitude, Level_01, Level_02,
                 Level_03) %>%
   collect()
@@ -436,16 +430,28 @@ mammals_GBIF <- mammals_GBIF %>%
     Level_03 = coalesce(Level_03, Level_02, Level_01),
     Level_02 = coalesce(Level_02, Level_01))
 
-#---------------------------------------#
+##---------------------------------------
 # 5.2. Standardize species names -----
-#---------------------------------------#
-species_names <- standardize.species.names(mammals_GBIF, mammals_mountain)
-GBIF_clean <- species_names$gbif
-mammals_clean <- species_names$litterature
+##---------------------------------------
+# Here, we use the function rgbif::name_backbone_checklist to standardize both GBIF and literature with the same procedure
+# The function standardize.species.names() follow the following procedure:
+#   1. for both gbif and literature species list, it return a dataframe with original names and corrected names
+#   2. in both dataset, it removes the species names flagged as unsufficiently accurate
+#   3. in both dataset, it replaces the original species names by the "true ones" from the rgbif function
+#   4. then it join both dataset, keeping in the gbif dataset only species found in the literature
 
-#------------------------#
+# The return is the gbif cleaned version, with standardized species names and only species found in our literature dataset
+
+species_names <- standardize.species.names(mammals_GBIF, mammals_dataframe)
+GBIF_clean <- species_names$gbif_final
+
+##------------------------
 # 5.3. Extract -----
-#------------------------#
+##------------------------
+# This function simply extract elevational limits from GBIF occurrences
+#   1. extract the elevation for each occurrences based on latitude and longitude coordinates
+#   2. group by species and mountain range (Level_03) and calculate the quantiles 0.05 and 0.95 to extract min and max elevational limits
+
 mammals_GBIF_elev <- extract.elevational.limits.GBIF(GBIF_clean, dem)
 
 # A bit of cleaning
@@ -456,16 +462,16 @@ mammals_GBIF_elev <- mammals_GBIF_elev %>%
 mammals_dataframe <- mammals_dataframe %>%
   left_join(mammals_GBIF_elev, by = c("sciname", "Mountain_range"))
 
-#---------------------------#
+##--------------------------
 # 5.4. Save data -----
-#--------------------------#
+##--------------------------
 
 # Save the file
 writexl::write_xlsx(mammals_dataframe, paste0(source_path, "GMBA_project/files_processed/mammals_dataframe.xlsx"))
 
-#----------------------------------------------------------#
+##----------------------------------------------------------
 # ----- 6. Clean and sort for expert validation
-#----------------------------------------------------------#
+##----------------------------------------------------------
 
 mammals_dataframe_experts <- mammals_dataframe %>%
   select(-c(overlap_area, overlap_pct, species_area)) %>%  # remove overlap info useless for experts
@@ -477,3 +483,21 @@ mammals_dataframe_experts <- mammals_dataframe %>%
     confidence_assessment = "",
     reviewer_comments = ""
   )
+
+# Write one file per mountain range to be sent to expert
+outdir <- paste0(source_path, "GMBA_project/Outputs/Mammals/")
+if (!file.exists(outdir)) {
+  dir.create(outdir, recursive = TRUE, showWarnings = FALSE)
+}
+
+mountain_ranges <- unique(mammals_dataframe_experts$Mountain_range)
+
+for (mr in mountain_ranges) {
+  df_sub <- mammals_dataframe_experts %>%
+    filter(Mountain_range == mr)
+  
+  # Clean the name for use as filename (remove special characters)
+  clean_name <- gsub("[^a-zA-Z0-9_-]", "_", mr)
+  
+  write_xlsx(df_sub, paste0(outdir, clean_name, ".xlsx"))
+}

@@ -1,16 +1,15 @@
-
-#-------------------------------------------------------------#
+##-------------------------------------------------------------
 #  -----  1. Source Amphibians distribution Data from IUCN
-#-------------------------------------------------------------#
+##-------------------------------------------------------------
 
 # shapefiles can be downloaded from The IUCN Red List of Threatened Species, version 6.3. https://www.iucnredlist.org/resources/spatial-data-download
 
-#-----------------------------#
+##-----------------------
 #  1.1. Set up -----
-#-----------------------------#
+##-----------------------
 library(here); library(data.table); library(dplyr)
 library(tidyverse); library(readxl); library(terra)
-library(sf); library(arrow); library(rgbif)
+library(sf); library(arrow); library(rgbif); library(writexl)
 
 # Load configuration
 #source(
@@ -24,10 +23,9 @@ source_path <- "C:/Users/berou1714/OneDrive - Norwegian University of Life Scien
 list.files(path = paste0(source_path, "GMBA_project/Functions"), pattern = "*.R", full.names = TRUE) %>%
   purrr::walk(source)
 
-
-#-----------------------------------------------#
+##------------------------------------------
 # 1.2. Load the range shapefiles  -----
-#-----------------------------------------------#
+##------------------------------------------
 # shp are divided in 2 parts
 # we filter the columns before downloading to simplify the dataframe
 # we only keep presence = 1, meaning that the species occur here, origin = 1, 2, ie native or reintroduced
@@ -53,10 +51,9 @@ amphibians_shapes <- amphibians_shapes %>%
   rename(sciname = "sci_name") %>%
   select(-c(presence, origin, seasonal))
 
-#-------------------------------------------#
+##------------------------------------
 #  1.3. Explore the dataset -----
-#-------------------------------------------#
-
+##------------------------------------
 amphibians_test <- amphibians_shapes %>%
   st_drop_geometry()
 # We test for duplicates
@@ -68,14 +65,14 @@ amphibians_test %>%
 # ------------------
 
 #### subset for code testing (TO BE REMOVED)
-amphibians_shapes_sub <- amphibians_shapes[sample(nrow(amphibians_shapes), 50), ]
+#amphibians_shapes_sub <- amphibians_shapes[sample(nrow(amphibians_shapes), 50), ]
 ####
 
-#-------------------------------------------#
+##-------------------------------------------
 #  1.4. Cropping duplicated species -----
-#-------------------------------------------#
+##-------------------------------------------
 
-duplicated_species <- amphibians_shapes_sub %>%
+duplicated_species <- amphibians_shapes %>%
   st_drop_geometry() %>%
   group_by(sciname) %>%
   summarise(n = n()) %>%
@@ -86,13 +83,13 @@ duplicated_species <- amphibians_shapes_sub %>%
 union.ranges <- function(duplicated_species, all_species) {
   
   # union the duplicated species
-  amphibians_unioned <- amphibians_shapes_sub %>% 
+  amphibians_unioned <- amphibians_shapes %>% 
     filter(sciname %in% duplicated_species) %>%
     group_by(sciname) %>%
     summarise(geometry = st_union(geometry), .groups = "drop")
   
   # keep non-duplicated species as is
-  amphibians_single <- amphibians_shapes_sub %>%
+  amphibians_single <- amphibians_shapes %>%
     filter(!sciname %in% duplicated_species)
   
   # combine both
@@ -102,27 +99,26 @@ union.ranges <- function(duplicated_species, all_species) {
 }
 
 # Process each species and combine results
-results <- union.ranges(duplicated_species, amphibians_shapes_sub)
+results <- union.ranges(duplicated_species, amphibians_shapes)
 
 amphibians_shapes_clean <- results
 
-#----------------------------------------------#
+##----------------------------------------------
 #  1.5. Visualise correct species ranges -----
-#----------------------------------------------#
+##----------------------------------------------
 ggplot() +
   geom_sf(data = amphibians_shapes_clean[1,], fill = "grey30", color = NA) +
   theme_minimal()
 
-#----------------------------------------------------------#
+##----------------------------------------------------------------
 #  ------ 2. Overlap Amphibians ranges with GMBA shapefile
-#----------------------------------------------------------#
+##----------------------------------------------------------------
 
 # This script overlaps Amphibians distribution ranges with GMBA mountain ranges (level 03) 
 
-#-----------------------------------------#
+##-------------------------------------
 # 2.1. Source gmba mountains -----
-#-----------------------------------------#
-
+##-------------------------------------
 #source the gmba regions
 mountain_shapes <- sf::st_read(paste0(source_path, "GMBA_project/GMBA_mountains/GMBA_Inventory_v2.0_standard_300/GMBA_Inventory_v2.0_standard_300.shp")) %>%
   st_make_valid()
@@ -161,16 +157,20 @@ ggplot() +
   sf_use_s2(TRUE)
   }
 
-#----------------------------------------------------------------------------------------#
+##---------------------------------------------------------------------------------------
 # 2.2. Intersect species ranges with GMBA and calculate overlap (value in km2 and %) 
-#-----------------------------------------------------------------------------------------#
+##---------------------------------------------------------------------------------------
 
 # The function overlap.mountain:
 # 1. creates bboxes for mountain ranges 
 # 2. If sp and mountain bbox intersect 
-#   2.1. it takes the area of a species in km2 (is already in amphibian dataset)
+#   2.1. it takes the area of a species in km2 (is already in reptile dataset)
 #   2.2. the percentage of overlap of the species range with the mountain range 
 # 3. removes all species with < 5km2 and < 1% overlap with a GMBA Mountain range
+
+# We chose these threshold to avoid excluding false negative, i.e. be as much inclusive as possible. 
+# With the 5km2, we make sure to select even small ranges species, common in mountain areas, and for very small ranges
+# species, i.e. < 5km2, we set a threshold at 1% to make sure to include them as well.
 
 # Execute the main function
 results <- overlap.mountain(mountain_shapes03, amphibians_shapes_clean)
@@ -185,24 +185,26 @@ results_failures <- results$failures_df
 # Let's create a base dataframe in which we will add the different columns throughout the process
 amphibians_dataframe <- results_success
 
-#----------------------------------------------------------#
+##----------------------------------------------------------
 #  ----- 3. Bind Elevations to Species 
-#----------------------------------------------------------#
+##----------------------------------------------------------
 
-# This script binds elevation data to species names 
+# This script binds elevation data to species names.
+# Elevation data have been extracted from the supplementary material of the following paper:
+# Guirguis et al. (2023). Risk of extinction increases towards higher elevations across the world's amphibians. 
+# Global Ecology and Biogeography, 32, 1954–1963. https://doi.org/10.1111/geb.13746
 
-#---------------------------------#
+##---------------------------
 # 3.1. Load data -----
-#---------------------------------#
-
+##---------------------------
 # Load the elevation data
 elevation_data <- read_excel(paste0(source_path, "GMBA_project/Raw_datasets/Amphibians/elevation/geb13746-sup-0001-tables1.xlsx")) %>%
   select("scientific_name", "elev_mid", "elev_range") %>%
   rename(sciname = "scientific_name")
 
-#--------------------------------#
+##-------------------------------
 # 3.2. Clean the data -----
-#--------------------------------#
+##-------------------------------
 # We have 2 columns, elev_mid is the middle of the elevation gradient
 # and elev range is the size of the elevation gradient
 # so we can deduce min and max
@@ -219,18 +221,17 @@ elevation_data <- elevation_data %>%
 
 elevation_data <- elevation_data %>% select(-c(elev_mid, elev_range))
 
-#--------------------------------#
+##-------------------------------
 # 3.3. Left join data -----
-#--------------------------------#
-
+##-------------------------------
 # Add extracted range limits to our base dataframe
 amphibians_dataframe <- amphibians_dataframe %>%
   left_join(elevation_data, by = "sciname") %>% 
   arrange(sciname)
 
-#----------------------------------------------------------#
+##----------------------------------------------------------
 #  ------- 4. Get elevations with DEM 
-#----------------------------------------------------------#
+##----------------------------------------------------------
 
 # This snippet extract the min and max elevational limits of each species in each mountain range
 # I use the Digital Elevation Model Copernicus GLO-90, with a resolution of 90m
@@ -239,21 +240,25 @@ amphibians_dataframe <- amphibians_dataframe %>%
 
 # The procedure is the following:
 #   1. I estimate the average best quantiles to estimate ranges limits, i.e. the quantiles with the average 
-#     lowest deviation to the 'true limits' that we extracted from the litterature (see part 3)
+#     lowest deviation to the 'true limits' that we extracted from the literature (see part 3)
 #   2. Based on these quantiles, I extract the elevational limits for each species x mountain range
 
+# LOGIC: Because we compare mountain specific limits (extracted from the DEM for each mountain range) with "true" elevational limits that are 
+# species specific but not mountain specific, we can have strong mismatches for widespread species. Therefore, we add a safety check
+# with the overlap_pct argument, only selecting in this process species with an overlap percentage > 50%, to ensure that the species is
+# specific to this mountain range or to this area (i.e. can include neighbouring mountain ranges).
 
-#----------------------------------------------------------#
+##-----------------------------------
 # 4.1. Load species data  ------
-#----------------------------------------------------------#
+##-----------------------------------
 
 # From the dataframe with species selected for each mountain range, we add their range distribution as a new column
 amphibians_mountain <- amphibians_dataframe %>%
   left_join(amphibians_shapes_clean %>% select(sciname, geometry), by = "sciname")
 
-#-------------------------------------------------------------#
+##-------------------------------------------------------------
 # 4.2. Crop species distribution in each mountain range  -----
-#-------------------------------------------------------------#
+##-------------------------------------------------------------
 amphibians_mountain_sf <- st_as_sf(amphibians_mountain) %>%
   st_make_valid()
 
@@ -290,14 +295,14 @@ ggplot() +
 
 # Now we have a dataframe with all the species and their distribution in each mountain ranges specifically
 
-#------------------------------#
+##----------------------------
 # 4.3. Add the DEM  -----
-#------------------------------#
+##----------------------------
 dem <- terra::rast(paste0(source_path, "GMBA_project/demMountains_GLO90.tif"))
 
-#----------------------------------------#
+##----------------------------------------
 # 4.4. Estimate the best quantile  -----
-#----------------------------------------#
+##----------------------------------------
 overlap_treshold <- 20
 quantiles <- estimate.quantile(amphibians_intersect, dem, overlap_treshold)
 
@@ -306,9 +311,9 @@ ggplot(quantiles, aes(x = quantile)) +
   geom_col(aes(y = mean_dev_max, fill = "blue", alpha = 0.5)) +
   theme_minimal()
 
-#-------------------------------------------------------#
+##-------------------------------------------------------
 # 4.5. Get amphibians elevational ranges with DEM -----
-#-------------------------------------------------------#
+##-------------------------------------------------------
 
 quantile_min <- quantiles %>%
   filter(quantile <= 0.49) %>%
@@ -324,11 +329,18 @@ amphibians_elevations_DEM <- extract.elevational.limits.DEM(amphibians_intersect
 amphibians_dataframe <- amphibians_dataframe %>%
   left_join(amphibians_elevations_DEM, by = c("sciname", "Mountain_range"))
 
-#------------------------------------------------------------------------#
+##------------------------------------------------------------------------
 # ------ 5. Get amphibians elevational ranges with GBIF
-#-------------------------------------------------------------------------#
+##------------------------------------------------------------------------
+# This snippet extract the min and max elevational limits of each species in each mountain range
+# I use the Digital Elevation Model Copernicus GLO-90, with a resolution of 90m
+# https://portal.opentopography.org/raster?opentopoID=OTSDEM.032021.4326.1
+# European Space Agency (2024). Copernicus Global Digital Elevation Model. Distributed by OpenTopography. https://doi.org/10.5069/G9028PQB.
 
-# Import GBIF dataset
+
+##---------------------------------------
+# 5.1. Import & clean GBIF dataset ----
+##---------------------------------------
 amphibians_GBIF <- arrow::open_dataset(paste0(source_path, "GBIF_data/data/Amphibia_parquetclean"))
 
 # Collect Parquet dataset to R
@@ -341,8 +353,8 @@ amphibians_GBIF <- amphibians_GBIF %>%
   rename(sciname = "species")
 
 # TAKE A SUBSET (TO BE REMOVED)
-amphibians_GBIF <- amphibians_GBIF %>%
-  filter(sciname %in% (distinct(., sciname) %>% slice_sample(n = 50) %>% pull(sciname)))
+#amphibians_GBIF <- amphibians_GBIF %>%
+  #filter(sciname %in% (distinct(., sciname) %>% slice_sample(n = 50) %>% pull(sciname)))
 
 # Fill empty Level_03 by the Level_02 or Level_01
 amphibians_GBIF <- amphibians_GBIF %>%
@@ -350,10 +362,28 @@ amphibians_GBIF <- amphibians_GBIF %>%
     Level_03 = coalesce(Level_03, Level_02, Level_01),
     Level_02 = coalesce(Level_02, Level_01))
 
-# ---- Standardize species names
+##---------------------------------------
+# 5.2. Standardize species names ----
+##---------------------------------------
+
+# Here, we use the function rgbif::name_backbone_checklist to standardize both GBIF and literature with the same procedure
+# The function standardize.species.names() follow the following procedure:
+#   1. for both gbif and literature species list, it return a dataframe with original names and corrected names
+#   2. in both dataset, it removes the species names flagged as unsufficiently accurate
+#   3. in both dataset, it replaces the original species names by the "true ones" from the rgbif function
+#   4. then it join both dataset, keeping in the gbif dataset only species found in the literature
+
+# The return is the gbif cleaned version, with standardized species names and only species found in our literature dataset
+
 species_names <- standardize.species.names(amphibians_GBIF, amphibians_mountain)
-GBIF_clean <- species_names$gbif_clean
-amphibians_clean <- species_names$litterature
+GBIF_clean <- species_names$gbif_final
+
+##---------------------------------------
+# 5.3. Extract elevational limits ----
+##---------------------------------------
+# This function simply extract elevational limits from GBIF occurrences
+#   1. extract the elevation for each occurrences based on latitude and longitude coordinates
+#   2. group by species and mountain range (Level_03) and calculate the quantiles 0.05 and 0.95 to extract min and max elevational limits
 
 amphibians_GBIF_elev <- extract.elevational.limits.GBIF(GBIF_clean, dem)
 
@@ -365,16 +395,16 @@ amphibians_GBIF_elev <- amphibians_GBIF_elev %>%
 amphibians_dataframe <- amphibians_dataframe %>%
   left_join(amphibians_GBIF_elev, by = c("sciname", "Mountain_range"))
 
-#---------------------------#
-# Save data -----
-#--------------------------#
+##-------------------------
+# 5.4. Save data -----
+##-------------------------
 
 # Save the file
 writexl::write_xlsx(amphibians_dataframe, paste0(source_path, "GMBA_project/files_processed/amphibians_dataframe.xlsx"))
 
-#----------------------------------------------------------#
+##----------------------------------------------------------
 # ----- 6. Clean and sort for expert validation
-#----------------------------------------------------------#
+##----------------------------------------------------------
 
 amphibians_dataframe_experts <- amphibians_dataframe %>%
   select(-c(overlap_area, overlap_pct, species_area)) %>%  # remove overlap info useless for experts
@@ -386,3 +416,21 @@ amphibians_dataframe_experts <- amphibians_dataframe %>%
     confidence_assessment = "",
     reviewer_comments = ""
   )
+
+# Write one file per mountain range to be sent to expert
+outdir <- paste0(source_path, "GMBA_project/Outputs/Amphibians/")
+if (!file.exists(outdir)) {
+  dir.create(outdir, recursive = TRUE, showWarnings = FALSE)
+}
+
+mountain_ranges <- unique(amphibians_dataframe_experts$Mountain_range)
+
+for (mr in mountain_ranges) {
+  df_sub <- amphibians_dataframe_experts %>%
+    filter(Mountain_range == mr)
+  
+  # Clean the name for use as filename (remove special characters)
+  clean_name <- gsub("[^a-zA-Z0-9_-]", "_", mr)
+  
+  write_xlsx(df_sub, paste0(outdir, clean_name, ".xlsx"))
+}

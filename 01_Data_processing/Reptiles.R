@@ -13,7 +13,7 @@
 ##-----------------------------
 library(here); library(data.table); library(dplyr)
 library(tidyverse); library(readxl); library(terra)
-library(sf); library(arrow); library(rgbif)
+library(sf); library(arrow); library(rgbif); library(writexl)
 
 # Load configuration
 #source(
@@ -21,7 +21,7 @@ library(sf); library(arrow); library(rgbif)
 #)
 
 # define data path OR even config.R file with libraries & path
-source_path <- "C:/Users/berou1714/OneDrive - Norwegian University of Life Sciences/Desktop/PhD_project/"
+source_path <- "/mnt/users/berou1714/PhD_project/"
 
 # source all functions
 list.files(path = paste0(source_path, "GMBA_project/Functions"), pattern = "*.R", full.names = TRUE) %>%
@@ -48,7 +48,7 @@ reptile_shapes_df %>%
   arrange(desc(n))
 
 #### subset for code testing (TO BE REMOVED)
-reptile_shapes <- reptile_shapes[sample(nrow(reptile_shapes), 100), ]
+#reptile_shapes <- reptile_shapes[sample(nrow(reptile_shapes), 50), ]
 ####
 
 
@@ -159,8 +159,7 @@ elevation_data[, 2:3] <- lapply(elevation_data[, 2:3], as.numeric)
 
 # Add extracted range limits to our base dataframe
 reptile_dataframe <- reptile_dataframe %>%
-  left_join(elevation_data, by = "sciname") %>% 
-  arrange(sciname)
+  left_join(elevation_data, by = "sciname")
 
 # We have some negative elevations value that could mean something in some depressions areas.
 # So we keep them.
@@ -235,7 +234,7 @@ ggplot() +
           fill = "red", alpha = 0.4) +
   coord_sf(xlim = c(bbox["xmin"], bbox["xmax"]), 
            ylim = c(bbox["ymin"], bbox["ymax"])) +
-  theme_perso()
+  theme.perso()
 
 # Now we have a dataframe with all the species and their distribution in each mountain ranges specifically
 
@@ -255,18 +254,17 @@ ggplot(quantiles, aes(x = quantile)) +
   geom_col(aes(y = mean_dev_max), fill = "blue", alpha = 0.5) +
   theme_minimal()
 
-
 ##-----------------------------------------------------
 # 4.5. Get reptile elevational ranges with DEM -----
 ##-----------------------------------------------------
 
 quantile_min <- quantiles %>%
   filter(quantile <= 0.49) %>%
-  filter(mean_abs_dev == min(mean_abs_dev))
+  filter(mean_dev_min == min(mean_dev_min))
 quantile_min
 quantile_max <- quantiles %>%
   filter(quantile >= 0.51) %>%
-  filter(mean_abs_dev == min(mean_abs_dev))
+  filter(mean_dev_max == min(mean_dev_max))
 quantile_max
 
 reptile_elevations_DEM <- extract.elevational.limits.DEM(reptile_intersect, dem, quantile_min, quantile_max)
@@ -299,8 +297,8 @@ reptile_GBIF <- reptile_GBIF %>%
   rename(sciname = "species")
 
 # TAKE A SUBSET (TO BE REMOVED)
-reptile_GBIF <- reptile_GBIF %>%
-  filter(sciname %in% (distinct(., sciname) %>% slice_sample(n = 50) %>% pull(sciname)))
+#reptile_GBIF <- reptile_GBIF %>%
+  #filter(sciname %in% (distinct(., sciname) %>% slice_sample(n = 50) %>% pull(sciname)))
 
 # Fill empty Level_03 by the Level_02 or Level_01
 reptile_GBIF <- reptile_GBIF %>%
@@ -322,8 +320,7 @@ reptile_GBIF <- reptile_GBIF %>%
 # The return is the gbif cleaned version, with standardized species names and only species found in our literature dataset
 
 species_names <- standardize.species.names(reptile_GBIF, reptile_mountain)
-GBIF_clean <- species_names$gbif
-reptile_clean <- species_names$literature
+GBIF_clean <- species_names$gbif_final
 
 ##---------------------------------------
 # 5.3. Extract elevational limits ----
@@ -363,3 +360,21 @@ reptile_dataframe_experts <- reptile_dataframe %>%
     confidence_assessment = "",
     reviewer_comments = ""
   )
+
+# Write one file per mountain range to be sent to expert
+outdir <- paste0(source_path, "GMBA_project/Outputs/Reptiles/")
+if (!file.exists(outdir)) {
+dir.create(outdir, recursive = TRUE, showWarnings = FALSE)
+}
+
+mountain_ranges <- unique(reptile_dataframe_experts$Mountain_range)
+
+for (mr in mountain_ranges) {
+  df_sub <- reptile_dataframe_experts %>%
+    filter(Mountain_range == mr)
+  
+  # Clean the name for use as filename (remove special characters)
+  clean_name <- gsub("[^a-zA-Z0-9_-]", "_", mr)
+  
+  write_xlsx(df_sub, paste0(outdir, clean_name, ".xlsx"))
+}

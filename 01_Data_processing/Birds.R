@@ -1,17 +1,18 @@
-#------------------------------------------------------------------------------#
-#  1. Source and check out data from BirdLife International
-#-----------------------------------------------------------------------------#
+##-----------------------------------------------------------------------------
+#  ---- 1. Source and check out data from BirdLife International
+##-----------------------------------------------------------------------------
 
-# Data has been received from BirdLife International after formal application on the 09.05.2023 
+# Data has been received from BirdLife International after formal application
 # BirdLife International and Handbook of the Birds of the World (2022) Bird species distribution maps of the world. Version 2022.2. 
 # Sourced from http://datazone.birdlife.org/species/requestdis.
 
-#----------------------------------------------------------#
-# 1. 1. Set up and load the data  -----
-#----------------------------------------------------------#
+##-------------------------
+# 1.1. Set up  -----
+##-------------------------
 library(here); library(data.table); library(dplyr)
 library(tidyverse); library(readxl); library(terra)
 library(sf); library(arrow); library(rgbif); library(gpkg)
+library(writexl)
 
 # Load configuration
 #source(
@@ -25,17 +26,16 @@ source_path <- "C:/Users/berou1714/OneDrive - Norwegian University of Life Scien
 list.files(path = paste0(source_path, "GMBA_project/Functions"), pattern = "*.R", full.names = TRUE) %>%
   purrr::walk(source)
 
-#----------------------------------------------------------#
-# Load the data  -----
-#----------------------------------------------------------#
+##-------------------------------
+# 1.2. Load the data  -----
+##-------------------------------
 geopac <- geopackage(paste0(source_path, "GMBA_project/Raw_datasets/Birds/species/BOTW_2025.gpkg"), connect = TRUE)
 gpkg_list_tables(geopac)
 gpkg_tbl(geopac, "all_species")
 
-
-#----------------------------------------------------------#
-# Explore the data  -----
-#----------------------------------------------------------#
+##--------------------------------
+# 1.3. Explore the data  -----
+##--------------------------------
 
 # total rows -> 11961
 gpkg_table(geopac, "all_species") %>%
@@ -58,7 +58,7 @@ birds_shapes <- st_read(paste0(source_path, "GMBA_project/Raw_datasets/Birds/spe
                           AND seasonal = 1")
 
 # Lets work with a subset (TO BE REMOVED)
-birds_shapes <- birds_shapes[sample(nrow(birds_shapes), 50), ]
+#birds_shapes <- birds_shapes[sample(nrow(birds_shapes), 50), ]
 ############
 
 birds_shapes <- birds_shapes %>%
@@ -69,9 +69,9 @@ ggplot(birds_shapes) +
   geom_sf(data = birds_shapes[3,], fill = "lightblue") +
   theme_perso()
 
-#--------------------------------------------------------------------#
-#  Cropping duplicated species -----
-#--------------------------------------------------------------------#
+##------------------------------------------
+#  1.4. Cropping duplicated species -----
+##------------------------------------------
 
 duplicated_species <- birds_shapes %>%
   st_drop_geometry() %>%
@@ -104,17 +104,15 @@ results <- union.ranges(duplicated_species, birds_shapes)
 
 birds_shapes_clean <- results
 
-#----------------------------------------------------------#
-#  3. Overlap Birds ranges with GMBA shapefile
-#----------------------------------------------------------#
+##---------------------------------------------------------
+#  ----- 2. Overlap Birds ranges with GMBA shapefile
+##---------------------------------------------------------
 
-# This script overlaps birds distribution ranges (BirdLife International) with GMBA mountain ranges (level 03) and alpine biome 
-# In total there are 10367 species to process
-# I divided in 10 chunks: chunk_1 : 10
+# This script overlaps birds distribution ranges (BirdLife International) with GMBA mountain ranges (level 03)
 
-#----------------------------------------------------------#
-# 2.2. Source gmba mountain and alpine biome shps   -----
-#----------------------------------------------------------#
+##-------------------------------------
+# 2.1. Source gmba mountain -----
+##-------------------------------------
 
 #source the gmba regions
 mountain_shapes <- sf::st_read(paste0(source_path, "GMBA_project/GMBA_mountains/GMBA_Inventory_v2.0_standard_300/GMBA_Inventory_v2.0_standard_300.shp")) %>%
@@ -154,49 +152,52 @@ ggplot() +
   sf_use_s2(TRUE)
   }
 
-#----------------------------------------------------------------------------------------#
-# 3.3. Intersect species ranges with GMBA and Alpine Biome and calculate % of overlap -----
-#-----------------------------------------------------------------------------------------#
+##------------------------------------------------------------------------------
+# 2.2. Intersect species ranges with GMBA and calculate % of overlap -----
+##------------------------------------------------------------------------------
 
-# The function intersect_species_mountain ranges:
-# 1. creates bboxes for mountain ranges and for the species that is beeing processed. 
+# The function overlap.mountain:
+# 1. creates bboxes for mountain ranges 
 # 2. If sp and mountain bbox intersect 
 #   2.1. it takes the area of a species in km2 (is already in reptile dataset)
 #   2.2. the percentage of overlap of the species range with the mountain range 
-#   2.3. the percentage of overlap with the alpine biome in that mountain range
-# 3. removes all species with < 1% overlap with a GMBA Mountain range
+# 3. removes all species with < 5km2 and < 1% overlap with a GMBA Mountain range
 
-# To test function
-#birds_shapes_filtered <- birds_shapes |> 
-#filter(sciname == "Ardea alba" | sciname == "Acrocephalus scirpaceus")
+# We chose these threshold to avoid excluding false negative, i.e. be as much inclusive as possible. 
+# With the 5km2, we make sure to select even small ranges species, common in mountain areas, and for very small ranges
+# species, i.e. < 5km2, we set a threshold at 1% to make sure to include them as well.
 
 # Execute the main function
 results <- overlap.mountain(mountain_shapes03, birds_shapes_clean)
 
 # Result is a list with two dataframes:
-# processed contains all species that have succesfully been processed
-# not processed contains species where an error occured
+# results_df contains all species that have succesfully been processed
+# failures_df contains species where an error occured
 
-birds_success <- results$results
-birds_failures <- results$failures
+results_success <- results$results_df
+results_failures <- results$failures_df
 
 # Let's create a base dataframe in which we will add the different columns throughout the process
-birds_dataframe <- birds_success
+birds_dataframe <- results_success
 
-#----------------------------------------------------------#
-#  4. Bind Elevations to Species 
-#----------------------------------------------------------#
+##-----------------------------------------------------
+#  ----- 3. Bind Elevations to Species 
+##-----------------------------------------------------
 
 # This script binds elevation data to species names sourced from Global database of birds (quintero and Jetz, 2018)
+# We have a file with the elevational limits per species and for different mountain ranges
+# and a file with the link between the mountain ID number and the corresponding mountain range from GMBA
 
-#----------------------------------------------------------#
-# 4.2. Load data -----
-#----------------------------------------------------------#
+##-----------------------------
+# 3.1. Load data -----
+##-----------------------------
 
 birds_elev_limits <- readxl::read_excel(paste0(source_path, "GMBA_project/Raw_datasets/Birds/elevation/birds_elevational_limits.xlsx"))
 mountain_ID <- readxl::read_excel(paste0(source_path, "GMBA_project/Raw_datasets/Birds/elevation/mountain_range_ID.xlsx"))
 
-# A bit of cleaning
+##-----------------------------
+# 3.2. Clean data -----
+##-----------------------------
 birds_elev_limits <- birds_elev_limits %>% 
   select(-7) %>%
   rename(Mountain_ID = "Mountain ID")
@@ -205,6 +206,9 @@ mountain_ID <- mountain_ID %>%
   filter(!is.na(Mountain_ID) & !is.na(`Mountain Range`)) %>%
   rename(Mountain_system = "Mountain Range")
 
+##----------------------------------------------------------
+# 3.3. Bind the mountain range ID to elevation limits -----
+##----------------------------------------------------------
 # Add the corresponding Mountain_system to the mountain ID number in the elev_limit file
 birds_elev_limits <- birds_elev_limits %>%
   left_join(mountain_ID, by = "Mountain_ID") %>%
@@ -233,22 +237,35 @@ birds_dataframe <- birds_dataframe %>%
   left_join(birds_elev_limits %>% select(sciname, min_elevation, max_elevation, Mountain_system),
             by = c("sciname", "Mountain_system"))
 
-#----------------------------------------------------------#
-#  5. Get elevations with DEM 
-#----------------------------------------------------------#
+##----------------------------------------------------------
+#  ----- 4. Get elevations with DEM 
+##----------------------------------------------------------
 
-# In this script I extract quartiles for species min and max elevations from their range shps using DEM
+# This snippet extract the min and max elevational limits of each species in each mountain range
+# I use the Digital Elevation Model Copernicus GLO-90, with a resolution of 90m
+# https://portal.opentopography.org/raster?opentopoID=OTSDEM.032021.4326.1
+# European Space Agency (2024). Copernicus Global Digital Elevation Model. Distributed by OpenTopography. https://doi.org/10.5069/G9028PQB.
 
-#-------------------------------------------------#
-# 5.2. Load species data and set API key  -----
-#----------------------------------------------------------#
+# The procedure is the following:
+#   1. I estimate the average best quantiles to estimate ranges limits, i.e. the quantiles with the average 
+#     lowest deviation to the 'true limits' that we extracted from the literature (see part 3)
+#   2. Based on these quantiles, I extract the elevational limits for each species x mountain range
+
+# LOGIC: Because we compare mountain specific limits (extracted from the DEM for each mountain range) with "true" elevational limits that are 
+# species specific but not mountain specific, we can have strong mismatches for widespread species. Therefore, we add a safety check
+# with the overlap_pct argument, only selecting in this process species with an overlap percentage > 50%, to ensure that the species is
+# specific to this mountain range or to this area (i.e. can include neighbouring mountain ranges).
+
+##--------------------------------------
+# 4.1. Load species data  -----
+##--------------------------------------
 # From the dataframe with species selected for each mountain range, we add their range distribution as a new column
 birds_mountain <- birds_dataframe %>%
   left_join(birds_shapes_clean, by = "sciname")
 
-#-------------------------------------------------------------#
+##-------------------------------------------------------------
 # 4.2. Crop species distribution in each mountain range  -----
-#-------------------------------------------------------------#
+##-------------------------------------------------------------
 birds_mountain_sf <- st_as_sf(birds_mountain) %>%
   st_make_valid()
 
@@ -285,19 +302,14 @@ ggplot() +
 
 # Now we have a dataframe with all the species and their distribution in each mountain ranges specifically
 
-
-#------------------------------------------------------------------------#
-# 5.4. Get birds elevational ranges with DEM -----
-#-------------------------------------------------------------------------#
-
-##------------------------------#
-# 4.2. Add the DEM  -----
-#------------------------------#
+##------------------------------
+# 4.3. Add the DEM  -----
+##------------------------------
 dem <- terra::rast(paste0(source_path, "GMBA_project/demMountains_GLO90.tif"))
 
-#----------------------------------------#
-# 4.2. Estimate the best quantile  -----
-#----------------------------------------#
+##----------------------------------------
+# 4.4. Estimate the best quantile  -----
+##----------------------------------------
 
 # Remember to choose an overlap threshold here
 overlap_treshold <- 20
@@ -323,18 +335,29 @@ quantiles %>%
   geom_vline(xintercept = quantile_max$quantile, color = "red", linewidth = 0.8, linetype = "dashed") +
   theme_minimal()
 
-#------------------------------------------------------------------------#
-# 4.4. Get birds elevational ranges with DEM -----
-#-------------------------------------------------------------------------#
+##---------------------------------------------------
+# 4.5. extract elevational ranges with DEM -----
+##---------------------------------------------------
 
 birds_elevations_DEM <- extract.elevational.limits.DEM(birds_intersect, dem, quantile_min, quantile_max)
 
 birds_dataframe <- birds_dataframe %>%
   left_join(birds_elevations_DEM, by = c("sciname", "Mountain_range"))
 
-#------------------------------------------------------------------------#
-# 4.4. Get birds elevational ranges with GBIF -----
-#-------------------------------------------------------------------------#
+
+##------------------------------------------------------------------------
+# ------ 5. Get birds elevational ranges with GBIF
+##------------------------------------------------------------------------
+
+# This snippet extract the min and max elevational limits of each species in each mountain range
+# I use the Digital Elevation Model Copernicus GLO-90, with a resolution of 90m
+# https://portal.opentopography.org/raster?opentopoID=OTSDEM.032021.4326.1
+# European Space Agency (2024). Copernicus Global Digital Elevation Model. Distributed by OpenTopography. https://doi.org/10.5069/G9028PQB.
+
+
+##---------------------------------------
+# 5.1. Import & clean GBIF dataset ----
+##---------------------------------------
 
 # Import GBIF dataset
 birds_GBIF <- arrow::open_dataset(paste0(source_path, "GBIF_data/data/Aves_parquetclean"))
@@ -342,15 +365,15 @@ birds_GBIF <- arrow::open_dataset(paste0(source_path, "GBIF_data/data/Aves_parqu
 # -----------
 # TAKE A SUBSET (TO BE REMOVED) 
 # The dataset is huge, so I first collect the species list and sample 50 of them
-species_sample <- birds_GBIF %>%
-  distinct(species) %>%
-  collect() %>%          
-  slice_sample(n = 50) %>%
-  pull(species)
+#species_sample <- birds_GBIF %>%
+  #distinct(species) %>%
+  #collect() %>%          
+  #slice_sample(n = 50) %>%
+  #pull(species)
 
 # Then I filter the GBIF dataset with this 50 species
 birds_GBIF <- birds_GBIF %>%
-  filter(species %in% species_sample) %>%
+  #filter(species %in% species_sample) %>%
   dplyr::select(species, decimalLatitude, decimalLongitude, Level_01, Level_02,
                 Level_03) %>%
   collect()
@@ -365,10 +388,29 @@ birds_GBIF <- birds_GBIF %>%
     Level_03 = coalesce(Level_03, Level_02, Level_01),
     Level_02 = coalesce(Level_02, Level_01))
 
-# ---- Standardize species names
+##---------------------------------------
+# 5.2. Standardize species names ----
+##---------------------------------------
+
+# Here, we use the function rgbif::name_backbone_checklist to standardize both GBIF and literature with the same procedure
+# The function standardize.species.names() follow the following procedure:
+#   1. for both gbif and literature species list, it return a dataframe with original names and corrected names
+#   2. in both dataset, it removes the species names flagged as unsufficiently accurate
+#   3. in both dataset, it replaces the original species names by the "true ones" from the rgbif function
+#   4. then it join both dataset, keeping in the gbif dataset only species found in the literature
+
+# The return is the gbif cleaned version, with standardized species names and only species found in our literature dataset
+
+
 species_names <- standardize.species.names(birds_GBIF, birds_mountain)
-GBIF_clean <- species_names$gbif
-birds_clean <- species_names$litterature
+GBIF_clean <- species_names$gbif_final
+
+##---------------------------------------
+# 5.3. Extract elevational limits ----
+##---------------------------------------
+# This function simply extract elevational limits from GBIF occurrences
+#   1. extract the elevation for each occurrences based on latitude and longitude coordinates
+#   2. group by species and mountain range (Level_03) and calculate the quantiles 0.05 and 0.95 to extract min and max elevational limits
 
 birds_GBIF_elev <- extract.elevational.limits.GBIF(GBIF_clean, dem)
 
@@ -380,19 +422,19 @@ birds_GBIF_elev <- birds_GBIF_elev %>%
 birds_dataframe <- birds_dataframe %>%
   left_join(birds_GBIF_elev, by = c("sciname", "Mountain_range"))
 
-#---------------------------#
-# 4.6. Save data -----
-#--------------------------#
+##------------------------
+#  5.4. Save data -----
+##------------------------
 
 # Save the file
 writexl::write_xlsx(birds_dataframe, paste0(source_path, "GMBA_project/files_processed/birds_dataframe.xlsx"))
 
-#----------------------------------------------------------#
-# 6. Clean and sort for expert validation
-#----------------------------------------------------------#
+##----------------------------------------------------------
+# ------ 6. Clean and sort for expert validation
+##----------------------------------------------------------
 
 birds_dataframe_experts <- birds_dataframe %>%
-  select(-c(overlap_area, overlap_pct, species_area)) %>%  # remove overlap info useless for experts
+  select(-c(overlap_area, overlap_pct, species_area, NumberOcc)) %>%  # remove overlap info useless for experts
   mutate(
     presence_corrected = "",
     min_corrected = "",
@@ -402,6 +444,20 @@ birds_dataframe_experts <- birds_dataframe %>%
     reviewer_comments = ""
   )
 
-# Save the file
-writexl::write_xlsx(birds_dataframe_experts, paste0(source_path, "GMBA_project/files_processed/birds_expert.xlsx"))
+# Write one file per mountain range to be sent to expert
+outdir <- paste0(source_path, "GMBA_project/Outputs/Birds/")
+if (!file.exists(outdir)) {
+  dir.create(outdir, recursive = TRUE, showWarnings = FALSE)
+}
 
+mountain_ranges <- unique(birds_dataframe_experts$Mountain_range)
+
+for (mr in mountain_ranges) {
+  df_sub <- birds_dataframe_experts %>%
+    filter(Mountain_range == mr)
+  
+  # Clean the name for use as filename (remove special characters)
+  clean_name <- gsub("[^a-zA-Z0-9_-]", "_", mr)
+  
+  write_xlsx(df_sub, paste0(outdir, clean_name, ".xlsx"))
+}
