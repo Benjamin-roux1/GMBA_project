@@ -14,6 +14,7 @@
 library(here); library(data.table); library(dplyr)
 library(tidyverse); library(readxl); library(terra)
 library(sf); library(arrow); library(rgbif); library(writexl)
+library(exactextractr)
 
 # Load configuration
 #source(
@@ -27,10 +28,11 @@ source_path <- "/mnt/users/berou1714/PhD_project/"
 list.files(path = paste0(source_path, "GMBA_project/Functions"), pattern = "*.R", full.names = TRUE) %>%
   purrr::walk(source)
 
-
 ##----------------------------------------
 # 1.2. Load the range shapefiles  -----
 ##----------------------------------------
+message("1.2. Load the range shapefiles")
+
 reptile_shapes <- sf::st_read(paste0(source_path, "GMBA_project/Raw_datasets/Reptiles/Distribution/doi_10_5061_dryad_9cnp5hqmb__v20220427/Gard_1_7_ranges.shp"), 
                               options = "ENCODING=ISO-8859-1") %>%
   st_make_valid()
@@ -51,7 +53,6 @@ reptile_shapes_df %>%
 #reptile_shapes <- reptile_shapes[sample(nrow(reptile_shapes), 50), ]
 ####
 
-
 ##---------------------------------------------------------
 #  ------ 2. Overlap Reptile ranges with GMBA shapefile
 ##---------------------------------------------------------
@@ -61,6 +62,7 @@ reptile_shapes_df %>%
 ##-------------------------------------
 # 2.1. Source gmba mountains -----
 ##-------------------------------------
+message("2.1. Source gmba mountains")
 
 #source the gmba regions
 mountain_shapes <- sf::st_read(paste0(source_path, "GMBA_project/GMBA_mountains/GMBA_Inventory_v2.0_standard_300/GMBA_Inventory_v2.0_standard_300.shp")) %>%
@@ -103,6 +105,7 @@ sf_use_s2(TRUE)
 ##--------------------------------------------------------------------------------------
 # 2.2. Intersect species ranges with GMBA and calculate overlap (value in km2 and %) 
 ##--------------------------------------------------------------------------------------
+message("2.2. Intersect species ranges with GMBA and calculate overlap (value in km2 and %) ")
 
 # The function overlap.mountain:
 # 1. creates bboxes for mountain ranges 
@@ -131,6 +134,7 @@ reptile_dataframe <- results_success
 ##-----------------------------------------------------------------
 #  ----- 3. Bind Elevations to Species 
 ##-----------------------------------------------------------------
+message("3. Bind Elevations to Species ")
 
 # This script binds elevation data to species names (GARD)
 # elevation data has been obtained by Squambase, Meiri 2024
@@ -156,6 +160,7 @@ elevation_data[, 2:3] <- lapply(elevation_data[, 2:3], as.numeric)
 ##---------------------------
 # 3.2. Left join data -----
 ##---------------------------
+message("3.2. Left join data")
 
 # Add extracted range limits to our base dataframe
 reptile_dataframe <- reptile_dataframe %>%
@@ -175,7 +180,7 @@ reptile_dataframe %>%
 ##----------------------------------------------
 #  ------- 4. Get elevations with DEM 
 ##----------------------------------------------
-
+message("4. Get elevations with DEM ")
 # This snippet extract the min and max elevational limits of each species in each mountain range
 # I use the Digital Elevation Model Copernicus GLO-90, with a resolution of 90m
 # https://portal.opentopography.org/raster?opentopoID=OTSDEM.032021.4326.1
@@ -194,6 +199,7 @@ reptile_dataframe %>%
 ##---------------------------------
 # 4.1. Load species data  ------
 ##---------------------------------
+message("4.1. Load species data ")
 
 # From the dataframe with species selected for each mountain range, we add their range distribution as a new column
 reptile_mountain <- reptile_dataframe %>%
@@ -202,6 +208,8 @@ reptile_mountain <- reptile_dataframe %>%
 ##-------------------------------------------------------------
 # 4.2. Crop species distribution in each mountain range  -----
 ##-------------------------------------------------------------
+message("4.2. Crop species distribution in each mountain range")
+
 reptile_mountain_sf <- st_as_sf(reptile_mountain) %>%
   st_make_valid()
 
@@ -209,14 +217,21 @@ reptile_mountain_sf <- st_as_sf(reptile_mountain) %>%
 {
   sf_use_s2(FALSE)
 reptile_intersect <- reptile_mountain_sf %>%
+  st_make_valid() %>%
   rowwise() %>%
   mutate(
-    geometry = st_intersection(
-      geometry,
-      mountain_shapes03 %>% 
-        filter(Level_03 == Mountain_range) %>% 
-        st_geometry()
-    )
+    geometry = tryCatch({
+      st_intersection(
+        st_make_valid(geometry),
+        mountain_shapes03 %>%
+          filter(Level_03 == Mountain_range) %>%
+          st_make_valid() %>%
+          st_geometry()
+      )
+    }, error = function(e) {
+      message("Intersection failed for ", Mountain_range, ": ", e$message)
+      st_geometrycollection()  # return empty geometry instead of crashing
+    })
   ) %>%
   ungroup()
 sf_use_s2(TRUE)
@@ -246,6 +261,8 @@ dem <- terra::rast(paste0(source_path, "GMBA_project/demMountains_GLO90.tif"))
 ##----------------------------------------
 # 4.4. Estimate the best quantile  -----
 ##----------------------------------------
+message("4.4. Estimate the best quantile")
+
 overlap_treshold <- 20
 quantiles <- estimate.quantile(reptile_intersect, dem, overlap_treshold)
 
@@ -257,6 +274,7 @@ ggplot(quantiles, aes(x = quantile)) +
 ##-----------------------------------------------------
 # 4.5. Get reptile elevational ranges with DEM -----
 ##-----------------------------------------------------
+message("4.5. Get reptile elevational ranges with DEM")
 
 quantile_min <- quantiles %>%
   filter(quantile <= 0.49) %>%
@@ -284,6 +302,7 @@ reptile_dataframe <- reptile_dataframe %>%
 ##---------------------------------------
 # 5.1. Import & clean GBIF dataset ----
 ##---------------------------------------
+message("5.1. Import & clean GBIF dataset")
 
 reptile_GBIF <- arrow::open_dataset(paste0(source_path, "GBIF_data/data/Squamata_parquetclean"))
 
@@ -309,6 +328,7 @@ reptile_GBIF <- reptile_GBIF %>%
 ##---------------------------------------
 # 5.2. Standardize species names ----
 ##---------------------------------------
+message("5.2. Standardize species names")
 
 # Here, we use the function rgbif::name_backbone_checklist to standardize both GBIF and literature with the same procedure
 # The function standardize.species.names() follow the following procedure:
@@ -328,6 +348,7 @@ GBIF_clean <- species_names$gbif_final
 # This function simply extract elevational limits from GBIF occurrences
 #   1. extract the elevation for each occurrences based on latitude and longitude coordinates
 #   2. group by species and mountain range (Level_03) and calculate the quantiles 0.05 and 0.95 to extract min and max elevational limits
+message("5.3. Extract elevational limits")
 
 reptiles_GBIF_elev <- extract.elevational.limits.GBIF(GBIF_clean, dem)
 
@@ -349,6 +370,7 @@ writexl::write_xlsx(reptile_dataframe, paste0(source_path, "GMBA_project/files_p
 ##----------------------------------------------------------
 # ----- 6. Clean and sort for expert validation
 ##----------------------------------------------------------
+message("6. Clean and sort for expert validation")
 
 reptile_dataframe_experts <- reptile_dataframe %>%
   select(-c(overlap_area, overlap_pct, species_area)) %>%  # remove overlap info useless for experts

@@ -23,33 +23,38 @@ estimate.quantile <- function (species, dem, overlap_threshold) {
   species <- species %>%
     filter(overlap_pct > overlap_threshold)
   
+  probs <- seq(0.01, 0.99, by = 0.01)
   results_list <- vector("list", nrow(species))
   
   for (i in seq_len(nrow(species))) {
-    message("Processing row ", i, " out of ", nrow(species))
+    message(sprintf("Processing row %d/%d: %s in %s", 
+                    i, nrow(species), species[i,]$sciname, species[i,]$Mountain_range))
     
     # get "true" limits for this species
     true_min <- species[i, ]$min_elevation
     true_max <- species[i, ]$max_elevation
 
     # Crop DEM to species x mountain area 
-    dem_crop <- terra::crop(dem, terra::vect(species[i, ]))
-    dem_mask <- terra::mask(dem_crop, terra::vect(species[i, ]))
-    elev_values <- terra::values(dem_mask, na.rm = TRUE)
+    elev_values <- tryCatch({
+      exactextractr::exact_extract(dem, species[i, ], fun = NULL)[[1]]$value
+    }, error = function(e) {
+      message("Extraction failed for row ", i, ": ", e$message)
+      return(NULL)
+    })
     
-    if (length(elev_values) == 0) {
+    if (is.null(elev_values) || length(elev_values) == 0) {
       message("No elevation values for row ", i, " — skipping")
       next
     }
     
     # Estimate the quantiles of elevation
-    all_quantiles <- quantile(elev_values, probs = seq(0.01, 0.99, by = 0.01)) 
+    all_quantiles <- quantile(elev_values, probs = probs, na.rm = TRUE) 
 
     # Compute deviation of each quantile with "true limit"
     results_list[[i]] <- data.frame(
       sciname  = species[i, ]$sciname,
       Mountain_range = species[i, ]$Mountain_range,
-      quantile = seq(0.01, 0.99, by = 0.01),
+      quantile = probs,
       dev_min = abs(all_quantiles - true_min),
       dev_max  = abs(all_quantiles - true_max)
     )
