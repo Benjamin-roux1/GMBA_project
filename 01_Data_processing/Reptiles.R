@@ -108,11 +108,12 @@ sf_use_s2(TRUE)
 message("2.2. Intersect species ranges with GMBA and calculate overlap (value in km2 and %) ")
 
 # The function overlap.mountain:
-# 1. creates bboxes for mountain ranges 
-# 2. If sp and mountain bbox intersect 
-#   2.1. it takes the area of a species in km2 (is already in reptile dataset)
-#   2.2. the percentage of overlap of the species range with the mountain range 
-# 3. removes all species with < 5km2 and < 1% overlap with a GMBA Mountain range
+# 1. Intersect species_df and all mountains --> return a list of the mountains that each species touch
+#   2. Process by species:
+#   3. calculate the area of the species in km2 
+#     4. For each mountain ranges it actually touches:
+#       5. calculate the percentage of overlap of the species range with the mountain range 
+#       6. removes all species with < 5km2 and < 1% overlap with a GMBA Mountain range
 
 # We chose these threshold to avoid excluding false negative, i.e. be as much inclusive as possible. 
 # With the 5km2, we make sure to select even small ranges species, common in mountain areas, and for very small ranges
