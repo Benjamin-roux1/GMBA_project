@@ -1,11 +1,11 @@
 ##----------------------------------------------------------
-#  1. Source Reptile distribution Data from GARD
+#  1. Source reptiles distribution Data from GARD
 ##----------------------------------------------------------
 
-# zips can be downloaded via the GARD Global Assessment of Reptile Distribution v.1.7: http://www.gardinitiative.org/data.html
-# Global distributions of 10,914 reptile species merged and collated from various sources.
+# zips can be downloaded via the GARD Global Assessment of reptiles Distribution v.1.7: http://www.gardinitiative.org/data.html
+# Global distributions of 10,914 reptiles species merged and collated from various sources.
 
-# Roll et. al. 2017 The global distribution of tetrapods reveals a need for targeted reptile conservation. Nature Ecology & Evolution 1:1677-1682
+# Roll et. al. 2017 The global distribution of tetrapods reveals a need for targeted reptiles conservation. Nature Ecology & Evolution 1:1677-1682
 # Caetano, et al. 2022. Automated assessment reveals that the extinction risk of reptiles is widely underestimated across space and phylogeny. PLoS Biology, 20(5): e3001544.
 
 ##-----------------------------
@@ -23,6 +23,7 @@ library(exactextractr)
 
 # define data path OR even config.R file with libraries & path
 source_path <- "/mnt/users/berou1714/PhD_project/"
+#source_path <- "C:/Users/berou1714/OneDrive - Norwegian University of Life Sciences/Desktop/PhD_project/"
 
 # source all functions
 list.files(path = paste0(source_path, "GMBA_project/Functions"), pattern = "*.R", full.names = TRUE) %>%
@@ -33,31 +34,31 @@ list.files(path = paste0(source_path, "GMBA_project/Functions"), pattern = "*.R"
 ##----------------------------------------
 message("1.2. Load the range shapefiles")
 
-reptile_shapes <- sf::st_read(paste0(source_path, "GMBA_project/Raw_datasets/Reptiles/Distribution/doi_10_5061_dryad_9cnp5hqmb__v20220427/Gard_1_7_ranges.shp"), 
+reptiles_shapes <- sf::st_read(paste0(source_path, "GMBA_project/Raw_datasets/Reptiles/Distribution/doi_10_5061_dryad_9cnp5hqmb__v20220427/Gard_1_7_ranges.shp"), 
                               options = "ENCODING=ISO-8859-1") %>%
   st_make_valid()
 
-reptile_shapes <- reptile_shapes %>%
+reptiles_shapes <- reptiles_shapes %>%
   rename(sciname = binomial)
 
 # Explore the dataset
-reptile_shapes_df <- reptile_shapes %>%
+reptiles_shapes_df <- reptiles_shapes %>%
   st_drop_geometry()
 # check the different groups
-reptile_shapes_df %>%
+reptiles_shapes_df %>%
   group_by(group) %>%
   summarise(n = n()) %>%
   arrange(desc(n))
 
 #### subset for code testing (TO BE REMOVED)
-#reptile_shapes <- reptile_shapes[sample(nrow(reptile_shapes), 50), ]
+#reptiles_shapes <- reptiles_shapes[sample(nrow(reptiles_shapes), 50), ]
 ####
 
 ##---------------------------------------------------------
-#  ------ 2. Overlap Reptile ranges with GMBA shapefile
+#  ------ 2. Overlap reptiles ranges with GMBA shapefile
 ##---------------------------------------------------------
 
-# This script overlaps reptile distribution ranges with GMBA mountain ranges (level 03) 
+# This script overlaps reptiles distribution ranges with GMBA mountain ranges (level 03) 
 
 ##-------------------------------------
 # 2.1. Source gmba mountains -----
@@ -120,7 +121,7 @@ message("2.2. Intersect species ranges with GMBA and calculate overlap (value in
 # species, i.e. < 5km2, we set a threshold at 1% to make sure to include them as well.
 
 # Execute the main function
-results <- overlap.mountain(mountain_shapes03, reptile_shapes)
+results <- overlap.mountain(mountain_shapes03, reptiles_shapes)
 
 # Result is a list with two dataframes:
 # results_df contains all species that have succesfully been processed
@@ -130,7 +131,7 @@ results_success <- results$results_df
 results_failures <- results$failures_df
 
 # Let's create a base dataframe in which we will add the different columns throughout the process
-reptile_dataframe <- results_success
+reptiles_dataframe <- results_success
 
 ##-----------------------------------------------------------------
 #  ----- 3. Bind Elevations to Species 
@@ -164,14 +165,14 @@ elevation_data[, 2:3] <- lapply(elevation_data[, 2:3], as.numeric)
 message("3.2. Left join data")
 
 # Add extracted range limits to our base dataframe
-reptile_dataframe <- reptile_dataframe %>%
+reptiles_dataframe <- reptiles_dataframe %>%
   left_join(elevation_data, by = "sciname")
 
 # We have some negative elevations value that could mean something in some depressions areas.
 # So we keep them.
 
 # count for how many species we miss min or max elevation data
-reptile_dataframe %>%
+reptiles_dataframe %>%
   summarise(
     missing_min = sum(is.na(min_elevation)),
     missing_max = sum(is.na(max_elevation)),
@@ -203,50 +204,62 @@ message("4. Get elevations with DEM ")
 message("4.1. Load species data ")
 
 # From the dataframe with species selected for each mountain range, we add their range distribution as a new column
-reptile_mountain <- reptile_dataframe %>%
-  left_join(reptile_shapes %>% select(sciname, geometry), by = "sciname")
+reptiles_mountain <- reptiles_dataframe %>%
+  left_join(reptiles_shapes %>% select(sciname, geometry), by = "sciname")
 
 ##-------------------------------------------------------------
 # 4.2. Crop species distribution in each mountain range  -----
 ##-------------------------------------------------------------
 message("4.2. Crop species distribution in each mountain range")
 
-reptile_mountain_sf <- st_as_sf(reptile_mountain) %>%
+reptiles_mountain_sf <- st_as_sf(reptiles_mountain) %>%
   st_make_valid()
 
 # Intersect for each row the species distribution with the corresponding mountain shp
-{
-  sf_use_s2(FALSE)
-reptile_intersect <- reptile_mountain_sf %>%
+sf_use_s2(FALSE)
+
+reptiles_intersect <- reptiles_mountain_sf %>%
   st_make_valid() %>%
-  rowwise() %>%
-  mutate(
-    geometry = tryCatch({
-      st_intersection(
-        st_make_valid(geometry),
-        mountain_shapes03 %>%
-          filter(Level_03 == Mountain_range) %>%
-          st_make_valid() %>%
-          st_geometry()
-      )
-    }, error = function(e) {
-      message("Intersection failed for ", Mountain_range, ": ", e$message)
-      st_geometrycollection()  # return empty geometry instead of crashing
-    })
+  left_join(
+    mountain_shapes03 %>%
+      select(- Level_01) %>%
+      st_make_valid() %>%
+      mutate(geom_mountain = geometry) %>%
+      st_drop_geometry(),  # drop sf class, keep geom_mountain as column
+    by = c("Mountain_range" = "Level_03", "Mountain_system" = "Level_02")
   ) %>%
-  ungroup()
+  mutate(
+    geometry = purrr::map2(
+      geometry, geom_mountain,
+      ~ {
+        if (is.null(.y) || length(.y) == 0) {
+          return(st_geometrycollection())
+        }
+        tryCatch(
+          st_intersection(.x, .y),
+          error = function(e) {
+            message("Intersection failed: ", e$message)
+            st_geometrycollection()
+          }
+        )
+      }
+    )
+  ) %>%
+  mutate(geometry = st_as_sfc(geometry, crs = st_crs(reptiles_mountain_sf))) %>%  # convert list to sfc
+  select(-geom_mountain) %>%
+  st_as_sf(sf_column_name = "geometry")
+
 sf_use_s2(TRUE)
-}
 
 
 # Visual check of the cropping
-sp <- reptile_intersect[1, ]
-bbox <- st_bbox(reptile_mountain_sf %>% filter(sciname == sp$sciname))
+sp <- reptiles_intersect[1, ]
+bbox <- st_bbox(reptiles_mountain_sf %>% filter(sciname == sp$sciname))
 ggplot() +
   geom_sf(data = mountain_shapes03, fill = NA, color = "grey50") +
-  geom_sf(data = reptile_mountain_sf %>% filter(sciname == sp$sciname),  # Whole species range
+  geom_sf(data = reptiles_mountain_sf %>% filter(sciname == sp$sciname),  # Whole species range
           fill = "lightblue", alpha = 0.6) + 
-  geom_sf(data = reptile_intersect %>% filter(sciname == sp$sciname),  # Intersected species range
+  geom_sf(data = reptiles_intersect %>% filter(sciname == sp$sciname),  # Intersected species range
           fill = "red", alpha = 0.4) +
   coord_sf(xlim = c(bbox["xmin"], bbox["xmax"]), 
            ylim = c(bbox["ymin"], bbox["ymax"])) +
@@ -265,7 +278,7 @@ dem <- terra::rast(paste0(source_path, "GMBA_project/demMountains_GLO90.tif"))
 message("4.4. Estimate the best quantile")
 
 overlap_treshold <- 20
-quantiles <- estimate.quantile(reptile_intersect, dem, overlap_treshold)
+quantiles <- estimate.quantile(reptiles_intersect, dem, overlap_treshold)
 
 ggplot(quantiles, aes(x = quantile)) +
   geom_col(aes(y = mean_dev_min), fill = "red", alpha = 0.5) + 
@@ -273,9 +286,9 @@ ggplot(quantiles, aes(x = quantile)) +
   theme_minimal()
 
 ##-----------------------------------------------------
-# 4.5. Get reptile elevational ranges with DEM -----
+# 4.5. Get reptiles elevational ranges with DEM -----
 ##-----------------------------------------------------
-message("4.5. Get reptile elevational ranges with DEM")
+message("4.5. Get reptiles elevational ranges with DEM")
 
 quantile_min <- quantiles %>%
   filter(quantile <= 0.49) %>%
@@ -286,13 +299,13 @@ quantile_max <- quantiles %>%
   filter(mean_dev_max == min(mean_dev_max))
 quantile_max
 
-reptile_elevations_DEM <- extract.elevational.limits.DEM(reptile_intersect, dem, quantile_min, quantile_max)
+reptiles_elevations_DEM <- extract.elevational.limits.DEM(reptiles_intersect, dem, quantile_min, quantile_max)
 
-reptile_dataframe <- reptile_dataframe %>%
-  left_join(reptile_elevations_DEM, by = c("sciname", "Mountain_range"))
+reptiles_dataframe <- reptiles_dataframe %>%
+  left_join(reptiles_elevations_DEM, by = c("sciname", "Mountain_range"))
 
 ##------------------------------------------------------------------------
-# ------ 5. Get reptile elevational ranges with GBIF
+# ------ 5. Get reptiles elevational ranges with GBIF
 ##------------------------------------------------------------------------
 
 # This snippet extract the min and max elevational limits of each species in each mountain range
@@ -305,23 +318,23 @@ reptile_dataframe <- reptile_dataframe %>%
 ##---------------------------------------
 message("5.1. Import & clean GBIF dataset")
 
-reptile_GBIF <- arrow::open_dataset(paste0(source_path, "GBIF_data/data/Squamata_parquetclean"))
+reptiles_GBIF <- arrow::open_dataset(paste0(source_path, "GBIF_data/data/Reptiles_parquetclean"))
 
 # Collect Parquet dataset to R
-reptile_GBIF <- reptile_GBIF %>%
+reptiles_GBIF <- reptiles_GBIF %>%
   dplyr::select(species, decimalLatitude, decimalLongitude, Level_01, Level_02,
                 Level_03) %>%
   collect()
 
-reptile_GBIF <- reptile_GBIF %>%
+reptiles_GBIF <- reptiles_GBIF %>%
   rename(sciname = "species")
 
 # TAKE A SUBSET (TO BE REMOVED)
-#reptile_GBIF <- reptile_GBIF %>%
+#reptiles_GBIF <- reptiles_GBIF %>%
   #filter(sciname %in% (distinct(., sciname) %>% slice_sample(n = 50) %>% pull(sciname)))
 
 # Fill empty Level_03 by the Level_02 or Level_01
-reptile_GBIF <- reptile_GBIF %>%
+reptiles_GBIF <- reptiles_GBIF %>%
   mutate(
     Level_03 = coalesce(Level_03, Level_02, Level_01),
     Level_02 = coalesce(Level_02, Level_01))
@@ -340,8 +353,15 @@ message("5.2. Standardize species names")
 
 # The return is the gbif cleaned version, with standardized species names and only species found in our literature dataset
 
-species_names <- standardize.species.names(reptile_GBIF, reptile_mountain)
+species_names <- standardize.species.names(reptiles_GBIF, reptiles_dataframe)
 GBIF_clean <- species_names$gbif_final
+
+# Update sciname in base dataframe
+reptiles_dataframe <- reptiles_dataframe %>%
+  left_join(species_names$name_mapping, 
+            by = c("sciname" = "verbatim_name")) %>%
+  mutate(sciname = ifelse(!is.na(canonicalName), canonicalName, sciname)) %>%
+  select(-canonicalName)
 
 ##---------------------------------------
 # 5.3. Extract elevational limits ----
@@ -358,7 +378,7 @@ reptiles_GBIF_elev <- reptiles_GBIF_elev %>%
   rename(Mountain_range = "Level_03")
 
 # Add GBIF elev to the base dataframe
-reptile_dataframe <- reptile_dataframe %>%
+reptiles_dataframe <- reptiles_dataframe %>%
   left_join(reptiles_GBIF_elev, by = c("sciname", "Mountain_range"))
  
 ##------------------------
@@ -366,15 +386,16 @@ reptile_dataframe <- reptile_dataframe %>%
 ##------------------------
 
 # Save the file
-writexl::write_xlsx(reptile_dataframe, paste0(source_path, "GMBA_project/files_processed/reptile_dataframe.xlsx"))
+writexl::write_xlsx(reptiles_dataframe, paste0(source_path, "GMBA_project/files_processed/reptiles_dataframe.xlsx"))
 
 ##----------------------------------------------------------
 # ----- 6. Clean and sort for expert validation
 ##----------------------------------------------------------
 message("6. Clean and sort for expert validation")
 
-reptile_dataframe_experts <- reptile_dataframe %>%
-  select(-c(overlap_area, overlap_pct, species_area)) %>%  # remove overlap info useless for experts
+reptiles_dataframe_experts <- reptiles_dataframe %>%
+  select(-c(overlap_area, overlap_pct, species_area, NumberOcc,
+            Abs_min_elevation_GBIF, Abs_max_elevation_GBIF)) %>%  # remove overlap info useless for experts
   mutate(
     presence_corrected = "",
     min_corrected = "",
@@ -390,10 +411,10 @@ if (!file.exists(outdir)) {
 dir.create(outdir, recursive = TRUE, showWarnings = FALSE)
 }
 
-mountain_ranges <- unique(reptile_dataframe_experts$Mountain_range)
+mountain_ranges <- unique(reptiles_dataframe_experts$Mountain_range)
 
 for (mr in mountain_ranges) {
-  df_sub <- reptile_dataframe_experts %>%
+  df_sub <- reptiles_dataframe_experts %>%
     filter(Mountain_range == mr)
   
   # Clean the name for use as filename (remove special characters)

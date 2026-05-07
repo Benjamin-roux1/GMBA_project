@@ -14,9 +14,21 @@
 
 overlap.mountain <- function(mountain_shapes, species_df) {
   
-  # Add genus column if missing. Little trick because reptiles doesnt have a genus column.
+  # Add the column if missing. Little trick to homogeneize all dataframes from different taxas.
   if (!"genus" %in% names(species_df)) {
     species_df$genus <- NA_character_
+  }
+  
+  if (!"family" %in% names(species_df)) {
+    species_df$family <- NA_character_
+  }
+  
+  if (!"order" %in% names(species_df)) {
+    species_df$order <- NA_character_
+  }
+  
+  if (!"seasonal" %in% names(species_df)) {
+    species_df$seasonal <- NA_character_
   }
   
   sf::sf_use_s2(FALSE)
@@ -60,6 +72,7 @@ overlap.mountain <- function(mountain_shapes, species_df) {
       }, error = function(e) {
         failures[[length(failures) + 1]] <<- data.frame(
           sciname = species$sciname,
+          seasonal = species$seasonal,
           Mountain_system = mountain$Level_02,
           Mountain_range = mountain$Level_03,
           stage = "intersection",
@@ -71,16 +84,22 @@ overlap.mountain <- function(mountain_shapes, species_df) {
       if (is.null(intersection) || nrow(intersection) == 0) next
       
       overlap_area <- as.numeric(sf::st_area(intersection)) / 10^6
-      if (is.na(overlap_area)) next
+      if (length(overlap_area) == 0 || is.na(overlap_area)) next
+      
+      # Also check species_area is valid
+      if (length(species_area) == 0 || is.na(species_area) || species_area == 0) next
       
       overlap_pct <- round((overlap_area / species_area) * 100, 4)
       if (length(overlap_pct) == 0 || is.na(overlap_pct)) next
       if (overlap_area < 5 & overlap_pct < 1) next
       
+      
       results[[length(results) + 1]] <- data.frame(
         sciname = species$sciname,
+        seasonal = species$seasonal,
         genus = species$genus,
         family = species$family,
+        order = species$order,
         Mountain_system = mountain$Level_02,
         Mountain_range = mountain$Level_03,
         overlap_area = round(overlap_area, 2),

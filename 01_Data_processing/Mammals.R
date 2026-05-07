@@ -11,6 +11,7 @@
 library(here); library(data.table); library(dplyr)
 library(tidyverse); library(readxl); library(terra)
 library(sf); library(arrow); library(rgbif); library(writexl)
+library(exactextractr)
 
 # Load configuration
 #source(
@@ -18,7 +19,8 @@ library(sf); library(arrow); library(rgbif); library(writexl)
 #)
 
 # define data path OR even config.R file with libraries & path
-source_path <- "C:/Users/berou1714/OneDrive - Norwegian University of Life Sciences/Desktop/PhD_project/"
+source_path <- "/mnt/users/berou1714/PhD_project/"
+#source_path <- "C:/Users/berou1714/OneDrive - Norwegian University of Life Sciences/Desktop/PhD_project/"
 
 # source all functions
 list.files(path = paste0(source_path, "GMBA_project/Functions"), pattern = "*.R", full.names = TRUE) %>%
@@ -27,21 +29,21 @@ list.files(path = paste0(source_path, "GMBA_project/Functions"), pattern = "*.R"
 ##--------------------------------------------------------
 # 1.2 Unzip folder containing range shapefiles  -----
 ##--------------------------------------------------------
+message("1.2. Unzip folder containing range shapefiles")
 
 # First, let's have a look at the organization of the folders and dataframe
 
 # Define the folder containing the zip file(s)
 zip_folder <- paste0(source_path, "GMBA_project/Raw_datasets/Mammals/MDD_Mammalia/")
 # Find the zip file in the folder
-zip_file <- list.files(zip_folder, pattern = "\\.zip$", full.names = TRUE)[1]
+#zip_file <- list.files(zip_folder, pattern = "\\.zip$", full.names = TRUE)[1]
 # Peek inside the zip
-zip_content <- unzip(zip_file, list = TRUE)
+#zip_content <- unzip(zip_file, list = TRUE)
 # Find the .gpkg file inside
-gpkg_file <- zip_content$Name[grepl("\\.gpkg$", zip_content$Name)][1]
+#gpkg_file <- zip_content$Name[grepl("\\.gpkg$", zip_content$Name)][1]
 # Extract and read it
-unzip(zip_file, files = gpkg_file, exdir = tempdir())
-mammals <- sf::st_read(file.path(tempdir(), gpkg_file), quiet = TRUE)
-head(mammals)
+#unzip(zip_file, files = gpkg_file, exdir = tempdir())
+#zip_test <- sf::st_read(file.path(tempdir(), gpkg_file), quiet = TRUE)
 
 # These files are heavy. Every time we will need the geometry (crop, DEM), we will loop over the orders.
 
@@ -57,6 +59,7 @@ head(mammals)
 ##------------------------------------------
 # 2.1 Source & clean gmba mountain   -----
 ##------------------------------------------
+message("2.1. Source gmba mountains")
 
 #source the gmba regions
 mountain_shapes <- sf::st_read(paste0(source_path, "GMBA_project/GMBA_mountains/GMBA_Inventory_v2.0_standard_300/GMBA_Inventory_v2.0_standard_300.shp")) %>%
@@ -99,15 +102,23 @@ ggplot() +
 ##--------------------------------------------------------------------------
 # 2.2. Intersect species ranges with GMBA and calculate % of overlap -----
 ##--------------------------------------------------------------------------
+
+message("2.2. Intersect species ranges with GMBA and calculate overlap (value in km2 and %) ")
+
 # We are going to loop over each order separately, instead of loading them all on R
 # So for each order, which correspond to a zipped file, we first unzip it and then process
+# In each zip file, we also process by chunk because it is otherwise extremely slow
 
 # Source to the folder with all the zipped files and make it a list of files
-zip_folder <- paste0(source_path, "GMBA_project/Raw_datasets/Mammals/MDD_Mammalia/TEST/")
+zip_folder <- paste0(source_path, "GMBA_project/Raw_datasets/Mammals/MDD_Mammalia/")
 zip_files <- list.files(zip_folder, pattern = "\\.zip$", full.names = TRUE)
 
 all_results <- list()   # store results from all orders
 all_failures <- list()  # store failures from all orders
+
+mytempdir <- "/mnt/SCRATCH/berou1714/tempdir/"
+
+chunk_size <- 25   # We process by chunks of 50 species
 
 for (zip_file in zip_files) {     # HERE START THE LOOP
   
@@ -121,52 +132,72 @@ for (zip_file in zip_files) {     # HERE START THE LOOP
   
   # If there is one, we unzip it in the tempdir() and then load it into R Studio
   if (!is.na(gpkg_file)) {
-    unzip(zip_file, files = gpkg_file, exdir = tempdir())
-    gpkg_path <- file.path(tempdir(), gpkg_file)
+    unzip(zip_file, files = gpkg_file, exdir = mytempdir)
+    gpkg_path <- file.path(mytempdir, gpkg_file)
     layer_name <- sf::st_layers(gpkg_path)$name[1]
     
-    mammals_shapes <- sf::st_read(gpkg_path, 
-                                  query = paste0("SELECT sciname, \"order\", family, geom FROM ", layer_name),
-                                  quiet = TRUE)
-
-
-    # The function overlap.mountain:
-    # 1. creates bboxes for mountain ranges 
-    # 2. If sp and mountain bbox intersect 
-    #   2.1. it takes the area of a species in km2 (is already in reptile dataset)
-    #   2.2. the percentage of overlap of the species range with the mountain range 
-    # 3. removes all species with < 5km2 and < 1% overlap with a GMBA Mountain range
+    message("File unzipped!")
     
-    # We chose these threshold to avoid excluding false negative, i.e. be as much inclusive as possible. 
-    # With the 5km2, we make sure to select even small ranges species, common in mountain areas, and for very small ranges
-    # species, i.e. < 5km2, we set a threshold at 1% to make sure to include them as well.
+    # Get total species count without loading geometries
+    total_species <- sf::st_read(gpkg_path,
+                                 query = paste0("SELECT COUNT(*) as n FROM ", layer_name),
+                                 quiet = TRUE)$n
+    message(sprintf("Total species: %d for %s", total_species, order_name))
     
-
-    results <- overlap.mountain(mountain_shapes03, mammals_shapes)
-
-    # results is a list with two dataframes:
-    # results_df contains all species that have succesfully been processed
-    # failures_df contains species where an error occured
-
-    # Store results, adding order name for traceability
-    if (!is.null(results$results_df)) {
-      all_results[[order_name]] <- results$results_df
+    # We process by chunks of 50 species
+    chunk_results <- list()
+    chunk_failures <- list()
+    offsets <- seq(0, total_species, by = chunk_size)   # Generate sequences of numbers 50 to 50 (0, 50, 100, ...)
+    
+    for (offset in offsets) {
+      if (offset >= total_species) next  # skip if no rows left
+      
+      message(sprintf("Reading chunk offset %d/%d", offset, total_species))
+      
+      chunk <- sf::st_read(gpkg_path,
+                           query = paste0("SELECT sciname, \"order\", family, geom 
+                                        FROM ", layer_name, "
+                                        LIMIT ", chunk_size, " OFFSET ", offset),   # Meaning: extract 50 rows starting from 'offset'
+                           quiet = TRUE) %>%
+        st_make_valid() %>%
+        st_transform(8857) %>%          # reproject to Equal Earth (meters)
+        st_simplify(dTolerance = 1000) %>%  # simplify to 10km
+        st_transform(4326) %>%          # reproject back to WGS84
+        st_make_valid()                 # fix any issues after simplification
+      
+      results <- overlap.mountain(mountain_shapes03, chunk)
+      
+      if (!is.null(results$results_df)) {
+        chunk_results[[as.character(offset)]] <- results$results_df
+      }
+      if (!is.null(results$failures_df)) {
+        chunk_failures[[as.character(offset)]] <- results$failures_df
+      }
+      
+      rm(chunk, results)
+      gc()
+      
     }
-    if (!is.null(results$failures_df)) {
-      all_failures[[order_name]] <- results$failures_df
+    
+    if (length(chunk_results) > 0) {
+      all_results[[order_name]] <- dplyr::bind_rows(chunk_results)
     }
+    if (length(chunk_failures) > 0) {
+      all_failures[[order_name]] <- dplyr::bind_rows(chunk_failures)
+    }
+    
+    message(sprintf("%s done!", order_name))
   }
 }    # HERE END THE LOOP
-
 
 # Combine all orders into one dataframe at the end
 mammals_dataframe <- dplyr::bind_rows(all_results)
 mammals_failures  <- dplyr::bind_rows(all_failures)
 
-
 ##-------------------------------------------------------------
 #  ----- 3. Clean the data from Handbook of Mammals 
 ##-------------------------------------------------------------
+message("3. Clean the data from Handbook of Mammals ")
 
 # Physical copies of Handbook of the Mammals of the World available at
 # https://github.com/jhpoelen/hmw
@@ -178,6 +209,7 @@ mammals_failures  <- dplyr::bind_rows(all_failures)
 ##------------------------------
 # 3.1. Download the data -----
 ##------------------------------
+message("3.1. Download the data")
 
 # This is the single files combined
 url <- "https://raw.githubusercontent.com/jhpoelen/hmw/main/hmw.csv"
@@ -186,6 +218,8 @@ hmw_data <- read.csv(url)
 ##----------------------------------
 # 3.2. Filter and clean HMW -----
 ##----------------------------------
+message("3.2. Filter and clean HMW")
+
 hmw_data <- hmw_data %>%
   rename(sciname = "name")
 
@@ -201,6 +235,7 @@ hmw_clean <- hmw_matched %>%
 ##-----------------------------------------------
 # 3.3. first clean out the common typos -----
 ##-----------------------------------------------
+message("3.3. first clean out the common typos")
 
 # common patterns numbers
 pattern <- "(\\w+\\s+){0,5}(\\d+\\s*\\-?\\s*\\d*\\s*m)(\\s+\\w+){0,5}"
@@ -223,6 +258,7 @@ hmw_clean <- hmw_clean |>
 ##-----------------------------------------------------------------
 # 3.4. Cleaning the elevations out of the habitat column -----
 ##-----------------------------------------------------------------
+message("3.4. Cleaning the elevations out of the habitat column")
 
 extract_elevation <- function(elevation_info) {
   
@@ -290,6 +326,7 @@ mammals_dataframe <- mammals_dataframe %>%
 ##----------------------------------------------------------
 # ----- 4. Get elevations with DEM 
 ##----------------------------------------------------------
+message("4. Get elevations with DEM ")
 
 # This snippet extract the min and max elevational limits of each species in each mountain range
 # I use the Digital Elevation Model Copernicus GLO-90, with a resolution of 90m
@@ -307,20 +344,19 @@ mammals_dataframe <- mammals_dataframe %>%
 # specific to this mountain range or to this area (i.e. can include neighbouring mountain ranges).
 
 
-
 # Here I will need to load range distribution, so it's gonna be in a loop again
 # From the base dataframe, we process by order:
 # --> we extract the zip file with multipolygons corresponding to this order
 # --> we add the geom column to our base dataframe filtered for this order
 # --> then we can run the function 
 
-zip_folder <- paste0(source_path, "GMBA_project/Raw_datasets/Mammals/MDD_Mammalia/TEST/")
+zip_folder <- paste0(source_path, "GMBA_project/Raw_datasets/Mammals/MDD_Mammalia/")
 zip_files <- list.files(zip_folder, pattern = "\\.zip$", full.names = TRUE)
 dem <- terra::rast(paste0(source_path, "GMBA_project/demMountains_GLO90.tif"))
 overlap_threshold <- 20
+chunk_size <- 25
 
-all_results <- list()   # store results from all orders
-all_failures <- list()  # store failures from all orders
+all_intersects <- list()   # store results from all orders
 
 for (zip_file in zip_files) {     
   
@@ -334,60 +370,118 @@ for (zip_file in zip_files) {
   
   # If there is one, we unzip it in the tempdir() and then load it into R Studio
   if (!is.na(gpkg_file)) {
-    unzip(zip_file, files = gpkg_file, exdir = tempdir())
-    gpkg_path <- file.path(tempdir(), gpkg_file)
+    unzip(zip_file, files = gpkg_file, exdir = mytempdir)
+    gpkg_path <- file.path(mytempdir, gpkg_file)
     layer_name <- sf::st_layers(gpkg_path)$name[1]
     
-    mammals_shapes <- sf::st_read(gpkg_path, 
-                                  query = paste0("SELECT sciname, \"order\", family, geom FROM ", layer_name),
-                                  quiet = TRUE)
-    message("\n--- File unzipped! ---\n")
-    
-    order_df <- mammals_dataframe %>%
+    # Get species for this order from mammals_dataframe
+    order_species <- mammals_dataframe %>%
       filter(order == order_name) %>%
-      left_join(mammals_shapes, by = "sciname")
+      pull(sciname) %>%
+      unique()
     
-    order_df_sf <- st_as_sf(order_df) %>%
-      sf::st_make_valid()
+    total_species <- length(order_species)
+    message(sprintf("Total species in dataframe for %s: %d", order_name, total_species))
     
-    message("\n--- Intersect each species of ", order_name, " to the mountain range! ---\n")
-    # Intersect for each row the species distribution with the corresponding mountain shp
-    sf::sf_use_s2(FALSE)
-      mammals_intersect <- order_df_sf %>%
-        rowwise() %>%
+    offsets <- seq(0, total_species, by = chunk_size)
+    chunk_intersects <- list()
+    
+    for (offset in offsets) {
+      if (offset >= total_species) next  # skip if no rows left
+      
+      message(sprintf("Reading chunk offset %d/%d", offset, total_species))
+      
+      # Get species names for this chunk
+      chunk_species <- order_species[(offset + 1):min(offset + chunk_size, total_species)]
+      species_list <- paste0("'", chunk_species, "'", collapse = ",")
+      
+      # Read only the shapes for these species
+      chunk_shapes <- sf::st_read(gpkg_path,
+                                  query = paste0("SELECT sciname, \"order\", family, geom 
+                                                 FROM ", layer_name, "
+                                                 WHERE sciname IN (", species_list, ")"),
+                                  quiet = TRUE) %>%
+        st_make_valid()
+      
+      # Join with mammals_dataframe for this chunk
+      order_df <- mammals_dataframe %>%
+        filter(sciname %in% chunk_species) %>%
+        left_join(chunk_shapes)
+      
+      order_df_sf <- st_as_sf(order_df) %>%
+        sf::st_make_valid()
+      
+      # Intersect for each row the species distribution with the corresponding mountain shp
+      sf_use_s2(FALSE)
+      
+      chunk_intersect <- order_df_sf %>%
+        st_make_valid() %>%
+        left_join(
+          mountain_shapes03 %>%
+            select(- Level_01) %>%
+            st_make_valid() %>%
+            mutate(geom_mountain = geometry) %>%
+            st_drop_geometry(),  # drop sf class, keep geom_mountain as column
+          by = c("Mountain_range" = "Level_03", "Mountain_system" = "Level_02")
+        ) %>%
         mutate(
-          geom = st_intersection(
-            geom,
-            mountain_shapes03 %>% 
-              filter(Level_03 == Mountain_range) %>% 
-              st_geometry()
+          geom = purrr::map2(
+            geom, geom_mountain,
+            ~ {
+              if (is.null(.y) || length(.y) == 0) {
+                return(st_geometrycollection())
+              }
+              tryCatch(
+                st_intersection(.x, .y),
+                error = function(e) {
+                  message("Intersection failed: ", e$message)
+                  st_geometrycollection()
+                }
+              )
+            }
           )
         ) %>%
-        ungroup()
-    sf::sf_use_s2(TRUE)
+        mutate(geom = st_as_sfc(geom, crs = st_crs(order_df_sf))) %>%  # convert list to sfc
+        select(-geom_mountain) %>%
+        st_as_sf(sf_column_name = "geom")
+      
+      sf_use_s2(TRUE)
+      
+      chunk_intersects[[as.character(offset)]] <- chunk_intersect
+      
+    }
     
-    message("\n--- Estimation of the best quantiles! ---\n")
-    quantiles <- estimate.quantile(mammals_intersect, dem, overlap_threshold)
-    quantile_min <- quantiles %>%
-      filter(quantile <= 0.49) %>%
-      filter(mean_dev_min == min(mean_dev_min))
-    quantile_max <- quantiles %>%
-      filter(quantile >= 0.51) %>%
-      filter(mean_dev_max == min(mean_dev_max))
+    # Combine all chunks for this order
+    all_intersects[[order_name]] <- dplyr::bind_rows(chunk_intersects)
     
-    message("\n--- Extraction of the DEM elevational limits! ---\n")
-    mammals_elevations_DEM <- extract.elevational.limits.DEM(mammals_intersect, dem, quantile_min, quantile_max)
-    
-    all_results[[order_name]] <- mammals_elevations_DEM
-    
-    message("\n--- Job is done for ", order_name, "! ---\n")
+    message("\n--- Done with ", order_name, "! ---\n")
   }
 }
 
-# combine all orders and join back to the main dataframe
-mammals_dataframe <- mammals_dataframe %>%
-  left_join(dplyr::bind_rows(all_results), by = c("sciname", "Mountain_range"))
+# Combine ALL orders for quantile estimation
+message("Combining all orders for quantile estimation...")
+all_mammals_intersect <- dplyr::bind_rows(all_intersects)
 
+message("Estimating quantiles for all orders...")
+# Estimate quantiles
+quantiles <- estimate.quantile(all_mammals_intersect, dem, overlap_threshold)
+
+if (is.null(quantiles)) stop("No valid quantiles found — check elevation data")
+
+quantile_min <- quantiles %>%
+  filter(quantile <= 0.49) %>%
+  filter(mean_dev_min == min(mean_dev_min))
+quantile_max <- quantiles %>%
+  filter(quantile >= 0.51) %>%
+  filter(mean_dev_max == min(mean_dev_max))
+
+message("Extracting elevation for all species...")
+# Extract DEM elevational limits
+mammals_elevations_DEM <- extract.elevational.limits.DEM(all_mammals_intersect, dem, quantile_min, quantile_max)
+
+# Combine all orders and join back to main dataframe
+mammals_dataframe <- mammals_dataframe %>%
+  left_join(dplyr::bind_rows(mammals_elevations_DEM), by = c("sciname", "Mountain_range"))
 
 ##----------------------------------------------------------
 # ----- 5. Get mammals elevational ranges with GBIF 
@@ -401,8 +495,9 @@ mammals_dataframe <- mammals_dataframe %>%
 ##--------------------------------
 # 5.1. Import GBIF dataset -----
 ##--------------------------------
+message("5.1. Import & clean GBIF dataset")
 
-mammals_GBIF <- arrow::open_dataset(paste0(source_path, "GBIF_data/data/Squamata_parquetclean"))
+mammals_GBIF <- arrow::open_dataset(paste0(source_path, "GBIF_data/data/Mammals_parquetclean"))
 
 # -----------
 # TAKE A SUBSET (TO BE REMOVED) 
@@ -445,12 +540,20 @@ mammals_GBIF <- mammals_GBIF %>%
 species_names <- standardize.species.names(mammals_GBIF, mammals_dataframe)
 GBIF_clean <- species_names$gbif_final
 
+# Update sciname in base dataframe
+mammals_dataframe <- mammals_dataframe %>%
+  left_join(species_names$name_mapping, 
+            by = c("sciname" = "verbatim_name")) %>%
+  mutate(sciname = ifelse(!is.na(canonicalName), canonicalName, sciname)) %>%
+  select(-canonicalName)
+
 ##------------------------
 # 5.3. Extract -----
 ##------------------------
 # This function simply extract elevational limits from GBIF occurrences
 #   1. extract the elevation for each occurrences based on latitude and longitude coordinates
 #   2. group by species and mountain range (Level_03) and calculate the quantiles 0.05 and 0.95 to extract min and max elevational limits
+# We calculate with all the species > 1 occurrences, i.e. even those with only 2 occurrences
 
 mammals_GBIF_elev <- extract.elevational.limits.GBIF(GBIF_clean, dem)
 
@@ -472,9 +575,11 @@ writexl::write_xlsx(mammals_dataframe, paste0(source_path, "GMBA_project/files_p
 ##----------------------------------------------------------
 # ----- 6. Clean and sort for expert validation
 ##----------------------------------------------------------
+message("6. Clean and sort for expert validation")
 
 mammals_dataframe_experts <- mammals_dataframe %>%
-  select(-c(overlap_area, overlap_pct, species_area)) %>%  # remove overlap info useless for experts
+  select(-c(overlap_area, overlap_pct, species_area, NumberOcc,
+            Abs_min_elevation_GBIF, Abs_max_elevation_GBIF)) %>%  # remove overlap info useless for experts
   mutate(
     presence_corrected = "",
     min_corrected = "",

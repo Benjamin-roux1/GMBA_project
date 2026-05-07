@@ -10,6 +10,7 @@
 library(here); library(data.table); library(dplyr)
 library(tidyverse); library(readxl); library(terra)
 library(sf); library(arrow); library(rgbif); library(writexl)
+library(exactextractr)
 
 # Load configuration
 #source(
@@ -17,7 +18,8 @@ library(sf); library(arrow); library(rgbif); library(writexl)
 #)
 
 # define data path OR even config.R file with libraries & path
-source_path <- "C:/Users/berou1714/OneDrive - Norwegian University of Life Sciences/Desktop/PhD_project/"
+source_path <- "/mnt/users/berou1714/PhD_project/"
+#source_path <- "C:/Users/berou1714/OneDrive - Norwegian University of Life Sciences/Desktop/PhD_project/"
 
 # source all functions
 list.files(path = paste0(source_path, "GMBA_project/Functions"), pattern = "*.R", full.names = TRUE) %>%
@@ -33,43 +35,46 @@ list.files(path = paste0(source_path, "GMBA_project/Functions"), pattern = "*.R"
 
 #geometry is loaded directly from st_read so no need to add in the query
 amphibians_shapes01 <- sf::st_read(paste0(source_path, "GMBA_project/Raw_datasets/Amphibians/AMPHIBIANS/AMPHIBIANS_PART1.shp"),
-                                   query = "SELECT sci_name, presence, origin, seasonal, family, genus, SHAPE_Area 
+                                   query = "SELECT sci_name, seasonal, family, genus, SHAPE_Area 
                                    FROM AMPHIBIANS_PART1
-                                   WHERE presence = 1 AND origin IN (1, 2) AND seasonal = 1")
+                                   WHERE presence = 1 AND origin IN (1, 2)")
 
 amphibians_shapes02 <- sf::st_read(paste0(source_path, "GMBA_project/Raw_datasets/Amphibians/AMPHIBIANS/AMPHIBIANS_PART2.shp"),
-                                   query = "SELECT sci_name, presence, origin, seasonal, family, genus, SHAPE_Area 
+                                   query = "SELECT sci_name, seasonal, family, genus, SHAPE_Area 
                                    FROM AMPHIBIANS_PART2
-                                   WHERE presence = 1 AND origin IN (1, 2) AND seasonal = 1")
+                                   WHERE presence = 1 AND origin IN (1, 2)")
 
 # combine the two dataframes
 amphibians_shapes <- bind_rows(amphibians_shapes01, amphibians_shapes02) %>%
   st_make_valid()
 
+# remove to save space
+rm(amphibians_shapes01, amphibians_shapes02)
+gc()
+
 # a bit of cleaning
 amphibians_shapes <- amphibians_shapes %>%
-  rename(sciname = "sci_name") %>%
-  select(-c(presence, origin, seasonal))
+  rename(sciname = "sci_name")
 
 ##------------------------------------
 #  1.3. Explore the dataset -----
 ##------------------------------------
-amphibians_test <- amphibians_shapes %>%
-  st_drop_geometry()
+#amphibians_test <- amphibians_shapes %>%
+ # st_drop_geometry()
 # We test for duplicates
-amphibians_test %>%
-  group_by(sci_name) %>%
-  summarise(n = n()) %>%
-  filter(n>1)
+#amphibians_test %>%
+ # group_by(sciname) %>%
+  #summarise(n = n()) %>%
+  #filter(n>1)
 # We have duplicated species, so let's first union the species
 # ------------------
 
 #### subset for code testing (TO BE REMOVED)
-#amphibians_shapes_sub <- amphibians_shapes[sample(nrow(amphibians_shapes), 50), ]
+#amphibians_shapes <- amphibians_shapes[sample(nrow(amphibians_shapes), 100), ]
 ####
 
 ##-------------------------------------------
-#  1.4. Cropping duplicated species -----
+#  1.4. Checking duplicated species -----
 ##-------------------------------------------
 
 duplicated_species <- amphibians_shapes %>%
@@ -77,38 +82,15 @@ duplicated_species <- amphibians_shapes %>%
   group_by(sciname) %>%
   summarise(n = n()) %>%
   filter(n > 1) %>%
-  pull(sciname)
-
-# Function to union ranges if species has more than one range
-union.ranges <- function(duplicated_species, all_species) {
-  
-  # union the duplicated species
-  amphibians_unioned <- amphibians_shapes %>% 
-    filter(sciname %in% duplicated_species) %>%
-    group_by(sciname) %>%
-    summarise(geometry = st_union(geometry), .groups = "drop")
-  
-  # keep non-duplicated species as is
-  amphibians_single <- amphibians_shapes %>%
-    filter(!sciname %in% duplicated_species)
-  
-  # combine both
-  amphibians_final <- bind_rows(amphibians_single, amphibians_unioned)
-  
-  return(amphibians_final)
-}
+  pull(sciname) %>%
+  unique()
 
 # Process each species and combine results
 results <- union.ranges(duplicated_species, amphibians_shapes)
 
 amphibians_shapes_clean <- results
 
-##----------------------------------------------
-#  1.5. Visualise correct species ranges -----
-##----------------------------------------------
-ggplot() +
-  geom_sf(data = amphibians_shapes_clean[1,], fill = "grey30", color = NA) +
-  theme_minimal()
+rm(amphibians_shapes, results)
 
 ##----------------------------------------------------------------
 #  ------ 2. Overlap Amphibians ranges with GMBA shapefile
@@ -185,6 +167,7 @@ results_failures <- results$failures_df
 # Let's create a base dataframe in which we will add the different columns throughout the process
 amphibians_dataframe <- results_success
 
+rm(results, results_success)
 ##----------------------------------------------------------
 #  ----- 3. Bind Elevations to Species 
 ##----------------------------------------------------------
@@ -254,7 +237,7 @@ amphibians_dataframe <- amphibians_dataframe %>%
 
 # From the dataframe with species selected for each mountain range, we add their range distribution as a new column
 amphibians_mountain <- amphibians_dataframe %>%
-  left_join(amphibians_shapes_clean %>% select(sciname, geometry), by = "sciname")
+  left_join(amphibians_shapes_clean)
 
 ##-------------------------------------------------------------
 # 4.2. Crop species distribution in each mountain range  -----
@@ -263,28 +246,46 @@ amphibians_mountain_sf <- st_as_sf(amphibians_mountain) %>%
   st_make_valid()
 
 # Intersect for each row the species distribution with the corresponding mountain shp
-{
-  sf_use_s2(FALSE)
-  amphibians_intersect <- amphibians_mountain_sf %>%
-    rowwise() %>%
-    mutate(
-      geometry = st_intersection(
-        geometry,
-        mountain_shapes03 %>% 
-          filter(Level_03 == Mountain_range) %>% 
-          st_geometry()
-      )
-    ) %>%
-    ungroup()
-  sf_use_s2(TRUE)
-  }
+sf_use_s2(FALSE)
 
+amphibians_intersect <- amphibians_mountain_sf %>%
+  st_make_valid() %>%
+  left_join(
+    mountain_shapes03 %>%
+      select(-Level_01) %>%
+      st_make_valid() %>%
+      mutate(geom_mountain = geometry) %>%
+      st_drop_geometry(),  # drop sf class, keep geom_mountain as column
+    by = c("Mountain_range" = "Level_03", "Mountain_system" = "Level_02")
+  ) %>%
+  mutate(
+    geometry = purrr::map2(
+      geometry, geom_mountain,
+      ~ {
+        if (is.null(.y) || length(.y) == 0) {
+          return(st_geometrycollection())
+        }
+        tryCatch(
+          st_intersection(.x, .y),
+          error = function(e) {
+            message("Intersection failed: ", e$message)
+            st_geometrycollection()
+          }
+        )
+      }
+    )
+  ) %>%
+  mutate(geometry = st_as_sfc(geometry, crs = st_crs(amphibians_mountain_sf))) %>%  # convert list to sfc
+  select(-geom_mountain) %>%
+  st_as_sf(sf_column_name = "geometry")
+
+sf_use_s2(TRUE)
 
 # Visual check of the cropping
-sp <- amphibians_intersect[38, ]
+sp <- amphibians_intersect[1, ]
 bbox <- st_bbox(amphibians_mountain_sf %>% filter(sciname == sp$sciname))
 ggplot() +
-  geom_sf(data = mountain_shapes03, fill = "grey40", color = "black") +
+  geom_sf(data = mountain_shapes03, color = "black") +
   geom_sf(data = amphibians_mountain_sf %>% filter(sciname == sp$sciname),  # Whole species range
           fill = "lightblue", alpha = 0.6) + 
   geom_sf(data = amphibians_intersect %>% filter(sciname == sp$sciname),  # Intersected species range
@@ -294,6 +295,9 @@ ggplot() +
   theme.perso()
 
 # Now we have a dataframe with all the species and their distribution in each mountain ranges specifically
+
+rm(amphibians_mountain_sf)
+gc()
 
 ##----------------------------
 # 4.3. Add the DEM  -----
@@ -375,8 +379,15 @@ amphibians_GBIF <- amphibians_GBIF %>%
 
 # The return is the gbif cleaned version, with standardized species names and only species found in our literature dataset
 
-species_names <- standardize.species.names(amphibians_GBIF, amphibians_mountain)
+species_names <- standardize.species.names(amphibians_GBIF, amphibians_dataframe)
 GBIF_clean <- species_names$gbif_final
+
+# Update sciname in base dataframe
+amphibians_dataframe <- amphibians_dataframe %>%
+  left_join(species_names$name_mapping, 
+            by = c("sciname" = "verbatim_name")) %>%
+  mutate(sciname = ifelse(!is.na(canonicalName), canonicalName, sciname)) %>%
+  select(-canonicalName)
 
 ##---------------------------------------
 # 5.3. Extract elevational limits ----
@@ -407,7 +418,8 @@ writexl::write_xlsx(amphibians_dataframe, paste0(source_path, "GMBA_project/file
 ##----------------------------------------------------------
 
 amphibians_dataframe_experts <- amphibians_dataframe %>%
-  select(-c(overlap_area, overlap_pct, species_area)) %>%  # remove overlap info useless for experts
+  select(-c(overlap_area, overlap_pct, species_area, NumberOcc,
+            Abs_min_elevation_GBIF, Abs_max_elevation_GBIF)) %>%  # remove overlap info useless for experts
   mutate(
     presence_corrected = "",
     min_corrected = "",

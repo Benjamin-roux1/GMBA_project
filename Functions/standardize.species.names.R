@@ -49,6 +49,12 @@ standardize.species.names <- function(gbif_data, literature_data) {
   gbif_final <- gbif_clean %>%
     semi_join(lit_clean, by = "sciname")
   
+  # 4. Build a name mapping table to update the base dataframe
+  name_mapping <- matched_lit %>%
+    filter(!matchType %in% c("HIGHERRANK", "FUZZY", "NONE")) %>%
+    select(verbatim_name, canonicalName) %>%
+    filter(!is.na(canonicalName))
+  
   message("Species removed from GBIF: ", n_distinct(gbif_data$sciname) - n_distinct(gbif_clean$sciname))
   message("Species removed from literature: ", n_distinct(literature_data$sciname) - n_distinct(lit_clean$sciname))
   message("Species in GBIF not in literature: ", n_distinct(gbif_clean$sciname) - n_distinct(gbif_final$sciname))
@@ -57,6 +63,7 @@ standardize.species.names <- function(gbif_data, literature_data) {
   return(list(
     gbif_clean = gbif_clean,
     literature = lit_clean,
-    gbif_final = gbif_final
+    gbif_final = gbif_final,
+    name_mapping = name_mapping
   ))
 }
