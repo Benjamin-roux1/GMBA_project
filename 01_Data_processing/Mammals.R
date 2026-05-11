@@ -99,6 +99,9 @@ ggplot() +
   sf_use_s2(TRUE)
   }
 
+rm(mountain_shapes)
+gc()
+
 ##--------------------------------------------------------------------------
 # 2.2. Intersect species ranges with GMBA and calculate % of overlap -----
 ##--------------------------------------------------------------------------
@@ -193,6 +196,9 @@ for (zip_file in zip_files) {     # HERE START THE LOOP
 # Combine all orders into one dataframe at the end
 mammals_dataframe <- dplyr::bind_rows(all_results)
 mammals_failures  <- dplyr::bind_rows(all_failures)
+
+rm(all_results, all_failures)
+gc()
 
 ##-------------------------------------------------------------
 #  ----- 3. Clean the data from Handbook of Mammals 
@@ -323,6 +329,9 @@ hmw_elevation <- hmw_clean |>
 mammals_dataframe <- mammals_dataframe %>%
   left_join(hmw_elevation, by = "sciname")
 
+rm(hmw_data, hmw_matched, hmw_clean, hmw_elevation)
+gc()
+
 ##----------------------------------------------------------
 # ----- 4. Get elevations with DEM 
 ##----------------------------------------------------------
@@ -354,7 +363,14 @@ zip_folder <- paste0(source_path, "GMBA_project/Raw_datasets/Mammals/MDD_Mammali
 zip_files <- list.files(zip_folder, pattern = "\\.zip$", full.names = TRUE)
 dem <- terra::rast(paste0(source_path, "GMBA_project/demMountains_GLO90.tif"))
 overlap_threshold <- 20
-chunk_size <- 25
+chunk_size <- 10
+
+# Precompute mountain_join
+mountain_join <- mountain_shapes03 %>%
+  select(-Level_01) %>%
+  st_make_valid() %>%
+  mutate(geom_mountain = geometry) %>%
+  st_drop_geometry()
 
 all_intersects <- list()   # store results from all orders
 
@@ -401,7 +417,11 @@ for (zip_file in zip_files) {
                                                  FROM ", layer_name, "
                                                  WHERE sciname IN (", species_list, ")"),
                                   quiet = TRUE) %>%
-        st_make_valid()
+        st_make_valid() %>%
+        st_transform(8857) %>%          # reproject to Equal Earth (meters)
+        st_simplify(dTolerance = 1000) %>%  # simplify to 1km
+        st_transform(4326) %>%          # reproject back to WGS84
+        st_make_valid()                 # fix any issues after simplification
       
       # Join with mammals_dataframe for this chunk
       order_df <- mammals_dataframe %>%
@@ -416,14 +436,7 @@ for (zip_file in zip_files) {
       
       chunk_intersect <- order_df_sf %>%
         st_make_valid() %>%
-        left_join(
-          mountain_shapes03 %>%
-            select(- Level_01) %>%
-            st_make_valid() %>%
-            mutate(geom_mountain = geometry) %>%
-            st_drop_geometry(),  # drop sf class, keep geom_mountain as column
-          by = c("Mountain_range" = "Level_03", "Mountain_system" = "Level_02")
-        ) %>%
+        left_join(mountain_join, by = c("Mountain_range" = "Level_03", "Mountain_system" = "Level_02")) %>%
         mutate(
           geom = purrr::map2(
             geom, geom_mountain,
@@ -449,10 +462,17 @@ for (zip_file in zip_files) {
       
       chunk_intersects[[as.character(offset)]] <- chunk_intersect
       
+      rm(chunk_shapes, chunk_species, chunk_intersect, order_df, order_df_sf)
+      gc()
+      
     }
     
     # Combine all chunks for this order
     all_intersects[[order_name]] <- dplyr::bind_rows(chunk_intersects)
+    
+    unlink(gpkg_path)
+    rm(chunk_intersects)
+    gc()
     
     message("\n--- Done with ", order_name, "! ---\n")
   }
@@ -461,6 +481,9 @@ for (zip_file in zip_files) {
 # Combine ALL orders for quantile estimation
 message("Combining all orders for quantile estimation...")
 all_mammals_intersect <- dplyr::bind_rows(all_intersects)
+
+rm(all_intersects)
+gc()
 
 message("Estimating quantiles for all orders...")
 # Estimate quantiles

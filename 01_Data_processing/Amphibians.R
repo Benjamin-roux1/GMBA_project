@@ -112,7 +112,8 @@ mountain_shapes <- sf::st_read(paste0(source_path, "GMBA_project/GMBA_mountains/
     st_wrap_dateline(options = c("WRAPDATELINE=YES", "DATELINEOFFSET=180")) %>%
     st_make_valid() %>%
     group_by(Level_01, Level_02, Level_03) %>%
-    summarise(geometry = st_union(geometry), .groups = "drop") %>%
+    summarise(geometry = st_union(geometry),
+              .groups = "drop") %>%
     st_make_valid()
   sf_use_s2(TRUE)
   }
@@ -138,6 +139,9 @@ ggplot() +
     st_make_valid()
   sf_use_s2(TRUE)
   }
+
+sf::st_write(mountain_shapes03,
+             paste0(source_path, "GMBA_project/GMBA_mountains/mountain_shapes03/mountain_shapes03.shp"))
 
 ##---------------------------------------------------------------------------------------
 # 2.2. Intersect species ranges with GMBA and calculate overlap (value in km2 and %) 

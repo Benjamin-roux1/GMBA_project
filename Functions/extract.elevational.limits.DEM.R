@@ -5,6 +5,12 @@
 
 extract.elevational.limits.DEM <- function(species, dem, quantile_min, quantile_max) {
   
+  # Filter out empty/broken geometries before extraction
+  species <- species %>%
+    filter(!st_is_empty(st_geometry(.))) %>%
+    filter(st_is_valid(st_geometry(.))) %>%
+    filter(as.numeric(st_area(st_geometry(.))) > 0)
+  
   results_list <- vector("list", nrow(species))
   
   for (i in seq_len(nrow(species))) {
@@ -12,7 +18,9 @@ extract.elevational.limits.DEM <- function(species, dem, quantile_min, quantile_
                     i, nrow(species), species[i,]$sciname, species[i,]$Mountain_range))
     
     elev_values <- tryCatch({
-      exactextractr::exact_extract(dem, species[i, ], fun = NULL)[[1]]$value
+      dem_crop <- terra::crop(dem, terra::vect(species[i, ]))
+      dem_mask <- terra::mask(dem_crop, terra::vect(species[i, ]))
+      terra::values(dem_mask, na.rm = TRUE)
     }, error = function(e) {
       message("Extraction failed for row ", i, ": ", e$message)
       return(NULL)

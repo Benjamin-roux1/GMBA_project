@@ -1,6 +1,8 @@
 ##-----------------------
 #  1.1. Set up -----
 ##-----------------------
+message("---- Set up! ----")
+
 library(here); library(data.table); library(dplyr)
 library(tidyverse); library(readxl); library(terra)
 library(sf); library(arrow); library(rgbif); library(writexl)
@@ -8,6 +10,7 @@ library(exactextractr)
 
 # define data path OR even config.R file with libraries & path
 source_path <- "/mnt/users/berou1714/PhD_project/"
+#source_path <- "C:/Users/berou1714/OneDrive - Norwegian University of Life Sciences/Desktop/PhD_project/"
 
 reptiles <- read_xlsx(paste0(source_path, "GMBA_project/files_processed/Reptiles/reptiles_dataframe.xlsx"))
 
@@ -25,7 +28,8 @@ reptiles_GBIF <- reptiles %>%
 # Boostrapping 
 
 # Bootstrap function
-# 
+message("---- Start running the bootstrap! ----")
+
 bootstrap <- function(data, replications, n_occ, source_path) {
   
   # Filter only the mountain ranges that have > n_occ, our defined threshold of number of occurrences
@@ -37,11 +41,13 @@ bootstrap <- function(data, replications, n_occ, source_path) {
   
   # 1. Run the function per mountain range:
   results <- furrr::future_map_dfr(mountain_names, function(mountain) {
-    
+
     # Extract all occurrences for the mountain range from GBIF parquet files 
     data_mountain <- arrow::open_dataset(paste0(source_path, "GBIF_data/processed_files/reptiles_gbif_parquet")) %>%
       filter(Level_03 == mountain) %>%
       collect()
+    
+    occ_total <-  nrow(data_mountain)
     
     if (nrow(data_mountain) == 0) return(NULL)
     
@@ -90,14 +96,18 @@ bootstrap <- function(data, replications, n_occ, source_path) {
         group_by(sciname) %>%
         summarise(
           Mountain_range = mountain,
-          subsample_occ = n,
-          elev_range = mean(elev_range, na.rm = TRUE),
-          maxelev = mean(maxelev, na.rm = TRUE),
-          minelev = mean(minelev, na.rm = TRUE),
-          n_occ_specie = mean(n_occ_species, na.rm = TRUE),
+          subsample_occ  = n,
+          occ_total = occ_total,
+          mean_elev_range = mean(elev_range, na.rm = TRUE),
+          sd_elev_range = sd(elev_range, na.rm = TRUE),
+          mean_maxelev = mean(maxelev, na.rm = TRUE),
+          sd_maxelev = sd(maxelev, na.rm = TRUE),
+          mean_minelev = mean(minelev, na.rm = TRUE),
+          sd_minelev = sd(minelev, na.rm = TRUE),
+          mean_occ_species = mean(n_occ_species, na.rm = TRUE),
+          sd_occ_species = sd(n_occ_species, na.rm = TRUE),
           .groups = "drop"
         )
-      
     })
   }, .options = furrr_options(seed = 42))
   
@@ -109,7 +119,8 @@ bootstrap <- function(data, replications, n_occ, source_path) {
 library(furrr)
 plan(multisession, workers = 10)
 
-bootstrap_results <- bootstrap(reptiles_GBIF, replications = 1000, n_occ = 2000, source_path = source_path)
+# we set a 1000 replications for each subsample, and we set the threshold of number of occurrences at 1, to keep all mountains
+bootstrap_results <- bootstrap(reptiles_GBIF, replications = 1000, n_occ = 1, source_path = source_path)
 plan(sequential)
 
 write.csv(bootstrap_results,

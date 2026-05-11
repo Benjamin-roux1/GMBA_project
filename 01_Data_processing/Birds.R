@@ -90,7 +90,11 @@ duplicated_species <- birds_shapes %>%
 # Process each species and combine results
 results <- union.ranges(duplicated_species, birds_shapes)
 
-birds_shapes_clean <- results
+birds_shapes_clean <- results %>%
+  st_transform(8857) %>%
+  st_simplify(dTolerance = 1000) %>%
+  st_transform(4326) %>%
+  st_make_valid()
 
 rm(birds_shapes, results)
 
@@ -261,7 +265,7 @@ gc()
 ##--------------------------------------
 # 4.1. Load species data  -----
 ##--------------------------------------
-chunk_size <- 500
+chunk_size <- 100
 all_species <- unique(birds_dataframe$sciname)
 total_species <- length(all_species)
 offsets <- seq(0, total_species, by = chunk_size)
