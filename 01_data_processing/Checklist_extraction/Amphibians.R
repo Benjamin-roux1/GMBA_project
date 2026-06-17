@@ -10,7 +10,7 @@
 library(here); library(data.table); library(dplyr)
 library(tidyverse); library(readxl); library(terra)
 library(sf); library(arrow); library(rgbif); library(writexl)
-library(exactextractr)
+library(exactextractr); library(furrr)
 
 # Load configuration
 #source(

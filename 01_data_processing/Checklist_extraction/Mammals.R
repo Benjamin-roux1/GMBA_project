@@ -11,7 +11,7 @@
 library(here); library(data.table); library(dplyr)
 library(tidyverse); library(readxl); library(terra)
 library(sf); library(arrow); library(rgbif); library(writexl)
-library(exactextractr)
+library(exactextractr); library(furrr)
 
 # Load configuration
 #source(
@@ -62,45 +62,8 @@ zip_folder <- paste0(source_path, "GMBA_project/Raw_datasets/Mammals/MDD_Mammali
 message("2.1. Source gmba mountains")
 
 #source the gmba regions
-mountain_shapes <- sf::st_read(paste0(source_path, "GMBA_project/GMBA_mountains/GMBA_Inventory_v2.0_standard_300/GMBA_Inventory_v2.0_standard_300.shp")) %>%
+mountain_shapes03 <- sf::st_read(paste0(source_path, "GMBA_project/GMBA_mountains/mountain_shapes03/mountain_shapes03.shp")) %>%
   st_make_valid()
-
-# Group by Level_03 (scale of mountain system chosen)
-{
-  sf_use_s2(FALSE)
-  mountain_shapes03 <- mountain_shapes %>%
-    st_wrap_dateline(options = c("WRAPDATELINE=YES", "DATELINEOFFSET=180")) %>%
-    st_make_valid() %>%
-    group_by(Level_01, Level_02, Level_03) %>%
-    summarise(geometry = st_union(geometry), .groups = "drop") %>%
-    st_make_valid()
-  sf_use_s2(TRUE)
-  }
-# so we have 137 distinct combinations level_02 - level_03, i.e 137 mountain systems
-
-# check correct mapping of the mountain systems
-ggplot() +
-  geom_sf(data = mountain_shapes03, fill = "grey30", color = NA) +
-  theme_minimal()
-
-# A bit of cleaning the mountain dataframe
-# some rows are not defined at Level03 or Level02
-# in these cases, we fill the NA with the closest filled upper level
-{
-  sf_use_s2(FALSE)
-  mountain_shapes03 <- mountain_shapes03 %>%
-    st_wrap_dateline(options = c("WRAPDATELINE=YES", "DATELINEOFFSET=180")) %>%
-    st_make_valid() %>%
-    mutate(
-      Level_03 = coalesce(Level_03, Level_02, Level_01),
-      Level_02 = coalesce(Level_02, Level_01)
-    ) %>%
-    st_make_valid()
-  sf_use_s2(TRUE)
-  }
-
-rm(mountain_shapes)
-gc()
 
 ##--------------------------------------------------------------------------
 # 2.2. Intersect species ranges with GMBA and calculate % of overlap -----
@@ -108,6 +71,11 @@ gc()
 
 message("2.2. Intersect species ranges with GMBA and calculate overlap (value in km2 and %) ")
 
+if (file.exists(paste0(source_path, "GMBA_project/Outputs/Mammals/Rds_saved/checkpoint_01_intersect.rds"))) {
+  message("Loading checkpoint 1...")
+  mammals_dataframe <- readRDS(paste0(source_path, "GMBA_project/Outputs/Mammals/Rds_saved/checkpoint_01_intersect.rds"))
+} else {
+  
 # We are going to loop over each order separately, instead of loading them all on R
 # So for each order, which correspond to a zipped file, we first unzip it and then process
 # In each zip file, we also process by chunk because it is otherwise extremely slow
@@ -197,14 +165,22 @@ for (zip_file in zip_files) {     # HERE START THE LOOP
 mammals_dataframe <- dplyr::bind_rows(all_results)
 mammals_failures  <- dplyr::bind_rows(all_failures)
 
+saveRDS(mammals_dataframe, paste0(source_path, "GMBA_project/Outputs/Mammals/Rds_saved/checkpoint_01_intersect.rds"))
+
 rm(all_results, all_failures)
 gc()
+}
 
 ##-------------------------------------------------------------
 #  ----- 3. Clean the data from Handbook of Mammals 
 ##-------------------------------------------------------------
 message("3. Clean the data from Handbook of Mammals ")
 
+if (file.exists(paste0(source_path, "GMBA_project/Outputs/Mammals/Rds_saved/checkpoint_02_elevLitterature.rds"))) {
+  message("Loading checkpoint 2...")
+  mammals_dataframe <- readRDS(paste0(source_path, "GMBA_project/Outputs/Mammals/Rds_saved/checkpoint_02_elevLitterature.rds"))
+} else {
+  
 # Physical copies of Handbook of the Mammals of the World available at
 # https://github.com/jhpoelen/hmw
 
@@ -329,14 +305,28 @@ hmw_elevation <- hmw_clean |>
 mammals_dataframe <- mammals_dataframe %>%
   left_join(hmw_elevation, by = "sciname")
 
+saveRDS(mammals_dataframe, paste0(source_path, "GMBA_project/Outputs/Mammals/Rds_saved/checkpoint_02_elevLitterature.rds"))
+
 rm(hmw_data, hmw_matched, hmw_clean, hmw_elevation)
 gc()
 
+}
 ##----------------------------------------------------------
 # ----- 4. Get elevations with DEM 
 ##----------------------------------------------------------
 message("4. Get elevations with DEM ")
 
+zip_folder <- paste0(source_path, "GMBA_project/Raw_datasets/Mammals/MDD_Mammalia/")
+zip_files <- list.files(zip_folder, pattern = "\\.zip$", full.names = TRUE)
+dem <- terra::rast(paste0(source_path, "GMBA_project/demMountains_GLO90.tif"))
+overlap_threshold <- 20
+chunk_size <- 10
+
+if (file.exists(paste0(source_path, "GMBA_project/Outputs/Mammals/Rds_saved/checkpoint_03_DEM.rds"))) {
+  message("Loading checkpoint 3...")
+  all_mammals_intersect <- readRDS(paste0(source_path, "GMBA_project/Outputs/Mammals/Rds_saved/checkpoint_03_DEM.rds"))
+} else {
+  
 # This snippet extract the min and max elevational limits of each species in each mountain range
 # I use the Digital Elevation Model Copernicus GLO-90, with a resolution of 90m
 # https://portal.opentopography.org/raster?opentopoID=OTSDEM.032021.4326.1
@@ -358,12 +348,6 @@ message("4. Get elevations with DEM ")
 # --> we extract the zip file with multipolygons corresponding to this order
 # --> we add the geom column to our base dataframe filtered for this order
 # --> then we can run the function 
-
-zip_folder <- paste0(source_path, "GMBA_project/Raw_datasets/Mammals/MDD_Mammalia/")
-zip_files <- list.files(zip_folder, pattern = "\\.zip$", full.names = TRUE)
-dem <- terra::rast(paste0(source_path, "GMBA_project/demMountains_GLO90.tif"))
-overlap_threshold <- 20
-chunk_size <- 10
 
 # Precompute mountain_join
 mountain_join <- mountain_shapes03 %>%
@@ -482,14 +466,26 @@ for (zip_file in zip_files) {
 message("Combining all orders for quantile estimation...")
 all_mammals_intersect <- dplyr::bind_rows(all_intersects)
 
+saveRDS(all_mammals_intersect, paste0(source_path, "GMBA_project/Outputs/Mammals/Rds_saved/checkpoint_03_DEM.rds"))
+
 rm(all_intersects)
 gc()
 
+}
+
+if (file.exists(paste0(source_path, "GMBA_project/Outputs/Mammals/Rds_saved/checkpoint_04_Quantiles.rds"))) {
+  message("Loading checkpoint 4...")
+  mammals_dataframe <- readRDS(paste0(source_path, "GMBA_project/Outputs/Mammals/Rds_saved/checkpoint_04_Quantiles.rds"))
+} else {
+  
 message("Estimating quantiles for all orders...")
 # Estimate quantiles
 quantiles <- estimate.quantile(all_mammals_intersect, dem, overlap_threshold)
 
 if (is.null(quantiles)) stop("No valid quantiles found — check elevation data")
+
+saveRDS(quantiles, paste0(source_path, "GMBA_project/Outputs/Mammals/Rds_saved/checkpoint_04_Quantiles.rds"))
+}
 
 quantile_min <- quantiles %>%
   filter(quantile <= 0.49) %>%
@@ -500,11 +496,20 @@ quantile_max <- quantiles %>%
 
 message("Extracting elevation for all species...")
 # Extract DEM elevational limits
+if (file.exists(paste0(source_path, "GMBA_project/Outputs/Mammals/Rds_saved/checkpoint_05_DEM.rds"))) {
+  message("Loading checkpoint 5...")
+  mammals_dataframe <- readRDS(paste0(source_path, "GMBA_project/Outputs/Mammals/Rds_saved/checkpoint_05_DEM.rds"))
+} else {
+  
 mammals_elevations_DEM <- extract.elevational.limits.DEM(all_mammals_intersect, dem, quantile_min, quantile_max)
 
 # Combine all orders and join back to main dataframe
 mammals_dataframe <- mammals_dataframe %>%
   left_join(dplyr::bind_rows(mammals_elevations_DEM), by = c("sciname", "Mountain_range"))
+
+saveRDS(mammals_dataframe, paste0(source_path, "GMBA_project/Outputs/Mammals/Rds_saved/checkpoint_05_DEM.rds"))
+
+}
 
 ##----------------------------------------------------------
 # ----- 5. Get mammals elevational ranges with GBIF 
@@ -518,6 +523,11 @@ mammals_dataframe <- mammals_dataframe %>%
 ##--------------------------------
 # 5.1. Import GBIF dataset -----
 ##--------------------------------
+if (file.exists(paste0(source_path, "GMBA_project/Outputs/Mammals/Rds_saved/checkpoint_06_GBIF.rds"))) {
+  message("Loading checkpoint 5...")
+  mammals_GBIF <- readRDS(paste0(source_path, "GMBA_project/Outputs/Mammals/Rds_saved/checkpoint_06_GBIF.rds"))
+} else {
+  
 message("5.1. Import & clean GBIF dataset")
 
 mammals_GBIF <- arrow::open_dataset(paste0(source_path, "GBIF_data/data/Mammals_parquetclean"))
@@ -548,6 +558,10 @@ mammals_GBIF <- mammals_GBIF %>%
     Level_03 = coalesce(Level_03, Level_02, Level_01),
     Level_02 = coalesce(Level_02, Level_01))
 
+saveRDS(mammals_GBIF, paste0(source_path, "GMBA_project/Outputs/Mammals/Rds_saved/checkpoint_06_GBIF.rds"))
+
+}
+
 ##---------------------------------------
 # 5.2. Standardize species names -----
 ##---------------------------------------
@@ -560,6 +574,11 @@ mammals_GBIF <- mammals_GBIF %>%
 
 # The return is the gbif cleaned version, with standardized species names and only species found in our literature dataset
 
+if (file.exists(paste0(source_path, "GMBA_project/Outputs/Mammals/Rds_saved/checkpoint_07_Standardize_names.rds"))) {
+  message("Loading checkpoint 6...")
+  mammals_dataframe <- readRDS(paste0(source_path, "GMBA_project/Outputs/Mammals/Rds_saved/checkpoint_07_Standardize_names.rds"))
+} else {
+  
 species_names <- standardize.species.names(mammals_GBIF, mammals_dataframe)
 GBIF_clean <- species_names$gbif_final
 
@@ -570,6 +589,10 @@ mammals_dataframe <- mammals_dataframe %>%
   mutate(sciname = ifelse(!is.na(canonicalName), canonicalName, sciname)) %>%
   select(-canonicalName)
 
+saveRDS(mammals_dataframe, paste0(source_path, "GMBA_project/Outputs/Mammals/Rds_saved/checkpoint_07_Standardize_names.rds"))
+
+}
+
 ##------------------------
 # 5.3. Extract -----
 ##------------------------
@@ -578,6 +601,11 @@ mammals_dataframe <- mammals_dataframe %>%
 #   2. group by species and mountain range (Level_03) and calculate the quantiles 0.05 and 0.95 to extract min and max elevational limits
 # We calculate with all the species > 1 occurrences, i.e. even those with only 2 occurrences
 
+if (file.exists(paste0(source_path, "GMBA_project/Outputs/Mammals/Rds_saved/checkpoint_08_GBIF_elev.rds"))) {
+  message("Loading checkpoint 7...")
+  mammals_dataframe <- readRDS(paste0(source_path, "GMBA_project/Outputs/Mammals/Rds_saved/checkpoint_08_GBIF_elev.rds"))
+} else {
+  
 mammals_GBIF_elev <- extract.elevational.limits.GBIF(GBIF_clean, dem)
 
 # A bit of cleaning
@@ -587,6 +615,10 @@ mammals_GBIF_elev <- mammals_GBIF_elev %>%
 # Add GBIF elev to the base dataframe
 mammals_dataframe <- mammals_dataframe %>%
   left_join(mammals_GBIF_elev, by = c("sciname", "Mountain_range"))
+
+saveRDS(mammals_dataframe, paste0(source_path, "GMBA_project/Outputs/Mammals/Rds_saved/checkpoint_08_GBIF_elev.rds"))
+
+}
 
 ##--------------------------
 # 5.4. Save data -----

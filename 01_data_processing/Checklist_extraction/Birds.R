@@ -12,7 +12,7 @@
 library(here); library(data.table); library(dplyr)
 library(tidyverse); library(readxl); library(terra)
 library(sf); library(arrow); library(rgbif); library(gpkg)
-library(writexl); library(exactextractr)
+library(writexl); library(exactextractr); library(furrr)
 
 # Load configuration
 #source(
@@ -79,6 +79,11 @@ ggplot(birds_shapes) +
 ##------------------------------------------
 message("1.4. Checking duplicated species ")
 
+if (file.exists(paste0(source_path, "GMBA_project/Outputs/Birds/Rds_saved/checkpoint_00_duplicated.rds"))) {
+  message("Loading checkpoint 00...")
+  birds_shapes_clean <- readRDS(paste0(source_path, "GMBA_project/Outputs/Birds/Rds_saved/checkpoint_00_duplicated.rds"))
+} else {
+  
 duplicated_species <- birds_shapes %>%
   st_drop_geometry() %>%
   group_by(sciname) %>%
@@ -96,8 +101,12 @@ birds_shapes_clean <- results %>%
   st_transform(4326) %>%
   st_make_valid()
 
-rm(birds_shapes, results)
+saveRDS(birds_shapes_clean, paste0(source_path, "GMBA_project/Outputs/Birds/Rds_saved/checkpoint_00_duplicated.rds"))
 
+rm(results)
+}
+
+rm(birds_shapes)
 # we have duplicated species because of different seasonality, so we keep them all
 # but we union same species with same seasonality
 
@@ -113,45 +122,9 @@ rm(birds_shapes, results)
 message("2.1. Source gmba mountain")
 
 #source the gmba regions
-mountain_shapes <- sf::st_read(paste0(source_path, "GMBA_project/GMBA_mountains/GMBA_Inventory_v2.0_standard_300/GMBA_Inventory_v2.0_standard_300.shp")) %>%
+mountain_shapes03 <- sf::st_read(paste0(source_path, "GMBA_project/GMBA_mountains/mountain_shapes03/mountain_shapes03.shp")) %>%
   st_make_valid()
 
-# Group by Level_03 (scale of mountain system chosen)
-{
-  sf_use_s2(FALSE)
-  mountain_shapes03 <- mountain_shapes %>%
-    st_wrap_dateline(options = c("WRAPDATELINE=YES", "DATELINEOFFSET=180")) %>%
-    st_make_valid() %>%
-    group_by(Level_01, Level_02, Level_03) %>%
-    summarise(geometry = st_union(geometry), .groups = "drop") %>%
-    st_make_valid()
-  sf_use_s2(TRUE)
-  }
-# so we have 137 distinct combinations level_02 - level_03, i.e 137 mountain systems
-
-# check correct mapping of the mountain systems
-ggplot() +
-  geom_sf(data = mountain_shapes03, fill = "grey30", color = NA) +
-  theme_minimal()
-
-# A bit of cleaning the mountain dataframe
-# some rows are not defined at Level03 or Level02
-# in these cases, we fill the NA with the closest filled upper level
-{
-  sf_use_s2(FALSE)
-  mountain_shapes03 <- mountain_shapes03 %>%
-    st_wrap_dateline(options = c("WRAPDATELINE=YES", "DATELINEOFFSET=180")) %>%
-    st_make_valid() %>%
-    mutate(
-      Level_03 = coalesce(Level_03, Level_02, Level_01),
-      Level_02 = coalesce(Level_02, Level_01)
-    ) %>%
-    st_make_valid()
-  sf_use_s2(TRUE)
-  }
-
-rm(mountain_shapes)
-gc()
 ##------------------------------------------------------------------------------
 # 2.2. Intersect species ranges with GMBA and calculate % of overlap -----
 ##------------------------------------------------------------------------------
@@ -169,6 +142,11 @@ message("2.2. Intersect species ranges with GMBA and calculate % of overlap")
 # species, i.e. < 5km2, we set a threshold at 1% to make sure to include them as well.
 
 # Execute the main function
+if (file.exists(paste0(source_path, "GMBA_project/Outputs/Birds/Rds_saved/checkpoint_01_overlap.rds"))) {
+  message("Loading checkpoint 1...")
+  birds_dataframe <- readRDS(paste0(source_path, "GMBA_project/Outputs/Birds/Rds_saved/checkpoint_01_overlap.rds"))
+} else {
+  
 results <- overlap.mountain(mountain_shapes03, birds_shapes_clean)
 
 # Result is a list with two dataframes:
@@ -178,10 +156,17 @@ results <- overlap.mountain(mountain_shapes03, birds_shapes_clean)
 results_success <- results$results_df
 results_failures <- results$failures_df
 
+saveRDS(results_failures, paste0(source_path, "GMBA_project/Outputs/Birds/Rds_saved/checkpoint_01_failures.rds"))
+
 # Let's create a base dataframe in which we will add the different columns throughout the process
 birds_dataframe <- results_success
 
+saveRDS(birds_dataframe, paste0(source_path, "GMBA_project/Outputs/Birds/Rds_saved/checkpoint_01_overlap.rds"))
+
 rm(results, results_success)
+}
+
+
 ##-----------------------------------------------------
 #  ----- 3. Bind Elevations to Species 
 ##-----------------------------------------------------
@@ -195,6 +180,11 @@ rm(results, results_success)
 ##-----------------------------
 message("3.1. Load data")
 
+if (file.exists(paste0(source_path, "GMBA_project/Outputs/Birds/Rds_saved/checkpoint_02_dataframe.rds"))) {
+  message("Loading checkpoint 2...")
+  birds_dataframe <- readRDS(paste0(source_path, "GMBA_project/Outputs/Birds/Rds_saved/checkpoint_02_dataframe.rds"))
+} else {
+  
 birds_elev_limits <- readxl::read_excel(paste0(source_path, "GMBA_project/Raw_datasets/Birds/elevation/birds_elevational_limits.xlsx"))
 mountain_ID <- readxl::read_excel(paste0(source_path, "GMBA_project/Raw_datasets/Birds/elevation/mountain_range_ID.xlsx"))
 
@@ -240,9 +230,12 @@ birds_dataframe <- birds_dataframe %>%
   left_join(birds_elev_limits %>% select(sciname, min_elevation, max_elevation, Mountain_system),
             by = c("sciname", "Mountain_system"))
 
+saveRDS(birds_dataframe, paste0(source_path, "GMBA_project/Outputs/Birds/Rds_saved/checkpoint_02_dataframe.rds"))
+
 rm(birds_elev_limits, mountain_ID)
 gc()
 
+}
 ##----------------------------------------------------------
 #  ----- 4. Get elevations with DEM 
 ##----------------------------------------------------------
@@ -276,6 +269,11 @@ chunk_intersects <- list()
 ##-------------------------------------------------------------
 message("4.2. Crop species distribution in each mountain range")
 
+if (file.exists(paste0(source_path, "GMBA_project/Outputs/Birds/Rds_saved/checkpoint_03_intersect.rds"))) {
+  message("Loading checkpoint 3...")
+  birds_intersect <- readRDS(paste0(source_path, "GMBA_project/Outputs/Birds/Rds_saved/checkpoint_03_intersect.rds"))
+} else {
+  
 sf_use_s2(FALSE)
 
 for (offset in offsets) {
@@ -332,9 +330,12 @@ for (offset in offsets) {
 sf_use_s2(TRUE)
 
 birds_intersect <- dplyr::bind_rows(chunk_intersects)
+saveRDS(birds_intersect, paste0(source_path, "GMBA_project/Outputs/Birds/Rds_saved/checkpoint_03_intersect.rds"))
+
 rm(chunk_intersects, birds_shapes_clean)
 gc()
 
+}
 # Now we have a dataframe with all the species and their distribution in each mountain ranges specifically
 
 ##------------------------------
@@ -347,18 +348,21 @@ dem <- terra::rast(paste0(source_path, "GMBA_project/demMountains_GLO90.tif"))
 ##----------------------------------------
 message("4.4. Estimate the best quantile")
 
+if (file.exists(paste0(source_path, "GMBA_project/Outputs/Birds/Rds_saved/checkpoint_04_quantiles.rds"))) {
+  message("Loading checkpoint 4...")
+  quantiles <- readRDS(paste0(source_path, "GMBA_project/Outputs/Birds/Rds_saved/checkpoint_04_quantiles.rds"))
+} else {
+  
 # Remember to choose an overlap threshold here
 overlap_treshold <- 20
 quantiles <- estimate.quantile(birds_intersect, dem, overlap_treshold)
 
-quantile_min <- quantiles %>%
-  filter(quantile <= 0.49) %>%
-  filter(mean_dev_min == min(mean_dev_min))
-quantile_min
-quantile_max <- quantiles %>%
-  filter(quantile >= 0.51) %>%
-  filter(mean_dev_max == min(mean_dev_max))
-quantile_max
+saveRDS(quantiles, paste0(source_path, "GMBA_project/Outputs/Birds/Rds_saved/checkpoint_04_quantiles.rds"))
+
+}
+
+quantile_min <- quantiles %>% filter(quantile <= 0.49) %>% filter(mean_dev_min == min(mean_dev_min))
+quantile_max <- quantiles %>% filter(quantile >= 0.51) %>% filter(mean_dev_max == min(mean_dev_max))
 
 quantiles %>%
   pivot_longer(cols = c(mean_dev_min, mean_dev_max),
@@ -379,11 +383,21 @@ gc()
 ##---------------------------------------------------
 message("4.5. extract elevational ranges with DEM")
 
+if (file.exists(paste0(source_path, "GMBA_project/Outputs/Birds/Rds_saved/checkpoint_05_DEM.rds"))) {
+  message("Loading checkpoint 5...")
+  birds_dataframe <- readRDS(paste0(source_path, "GMBA_project/Outputs/Birds/Rds_saved/checkpoint_05_DEM.rds"))
+} else {
+  
 birds_elevations_DEM <- extract.elevational.limits.DEM(birds_intersect, dem, quantile_min, quantile_max)
 
 birds_dataframe <- birds_dataframe %>%
   left_join(birds_elevations_DEM, by = c("sciname", "Mountain_range"))
 
+saveRDS(birds_dataframe, paste0(source_path, "GMBA_project/Outputs/Birds/Rds_saved/checkpoint_05_DEM.rds"))
+
+rm(birds_elevations_DEM)
+gc()
+}
 
 ##------------------------------------------------------------------------
 # ------ 5. Get birds elevational ranges with GBIF
@@ -400,6 +414,11 @@ birds_dataframe <- birds_dataframe %>%
 ##---------------------------------------
 message("5.1. Import & clean GBIF dataset ")
 
+if (file.exists(paste0(source_path, "GMBA_project/Outputs/Birds/Rds_saved/checkpoint_06_GBIF.rds"))) {
+  message("Loading checkpoint 6...")
+  birds_GBIF <- readRDS(paste0(source_path, "GMBA_project/Outputs/Birds/Rds_saved/checkpoint_06_GBIF.rds"))
+} else {
+  
 # Import GBIF dataset
 birds_GBIF <- arrow::open_dataset(paste0(source_path, "GBIF_data/data/Aves_parquetclean"))
 
@@ -429,6 +448,9 @@ birds_GBIF <- birds_GBIF %>%
     Level_03 = coalesce(Level_03, Level_02, Level_01),
     Level_02 = coalesce(Level_02, Level_01))
 
+saveRDS(birds_GBIF, paste0(source_path, "GMBA_project/Outputs/Birds/Rds_saved/checkpoint_06_GBIF.rds"))
+
+}
 ##---------------------------------------
 # 5.2. Standardize species names ----
 ##---------------------------------------
@@ -444,6 +466,11 @@ birds_GBIF <- birds_GBIF %>%
 
 message("5.2. Standardize species names ")
 
+if (file.exists(paste0(source_path, "GMBA_project/Outputs/Birds/Rds_saved/checkpoint_07_Standardize_names.rds"))) {
+  message("Loading checkpoint 7...")
+  birds_dataframe <- readRDS(paste0(source_path, "GMBA_project/Outputs/Birds/Rds_saved/checkpoint_07_Standardize_names.rds"))
+} else {
+  
 species_names <- standardize.species.names(birds_GBIF, birds_dataframe)
 GBIF_clean <- species_names$gbif_final
 
@@ -454,6 +481,9 @@ birds_dataframe <- birds_dataframe %>%
   mutate(sciname = ifelse(!is.na(canonicalName), canonicalName, sciname)) %>%
   select(-canonicalName)
 
+saveRDS(birds_dataframe, paste0(source_path, "GMBA_project/Outputs/Birds/Rds_saved/checkpoint_07_Standardize_names.rds"))
+
+}
 ##---------------------------------------
 # 5.3. Extract elevational limits ----
 ##---------------------------------------
@@ -462,6 +492,11 @@ birds_dataframe <- birds_dataframe %>%
 #   2. group by species and mountain range (Level_03) and calculate the quantiles 0.05 and 0.95 to extract min and max elevational limits
 message("5.3. Extract elevational limits")
 
+if (file.exists(paste0(source_path, "GMBA_project/Outputs/Birds/Rds_saved/checkpoint_08_GBIFelev.rds"))) {
+  message("Loading checkpoint 8...")
+  birds_dataframe <- readRDS(paste0(source_path, "GMBA_project/Outputs/Birds/Rds_saved/checkpoint_08_GBIFelev.rds"))
+} else {
+  
 birds_GBIF_elev <- extract.elevational.limits.GBIF(GBIF_clean, dem)
 
 # A bit of cleaning
@@ -471,6 +506,10 @@ birds_GBIF_elev <- birds_GBIF_elev %>%
 # Add GBIF elev to the base dataframe
 birds_dataframe <- birds_dataframe %>%
   left_join(birds_GBIF_elev, by = c("sciname", "Mountain_range"))
+
+saveRDS(birds_dataframe, paste0(source_path, "GMBA_project/Outputs/Birds/Rds_saved/checkpoint_08_GBIFelev.rds"))
+
+}
 
 ##------------------------
 #  5.4. Save data -----
