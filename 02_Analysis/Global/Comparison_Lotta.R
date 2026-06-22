@@ -12,7 +12,7 @@ library(here); library(data.table); library(dplyr)
 library(tidyverse); library(readxl); library(terra)
 library(sf); library(arrow); library(rgbif); library(writexl)
 library(exactextractr); library(Cairo); library(furrr)
-library(ggborderline); library(patchwork)
+library(ggborderline); library(patchwork); library(matrixStats)
 
 # Load configuration
 #source(

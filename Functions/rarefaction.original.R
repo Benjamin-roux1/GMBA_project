@@ -14,49 +14,49 @@ rarefaction.Nsp <- function(data, replications, n_occ) {
   
   results <- furrr::future_map_dfr(mountain_names, function(mountain) {
     
-    data_mountain <- data %>%
-      filter(Mountain_range == mountain)
-    
+    data_mountain <- data %>% filter(Mountain_range == mountain)
     if (nrow(data_mountain) == 0) return(NULL)
+    
+    species_split <- split(data_mountain, data_mountain$sciname)
+    # Total occurrences per species, computed once per mountain
+    species_totals <- vapply(species_split, nrow, integer(1))
     
     # 2. For each subsampling level:
     map_dfr(occ_seq, function(n) {
       
       # Filter only the species with enough occurrences
-      species_names <- data_mountain %>%
-        group_by(sciname) %>%
-        summarise(total_occ = n(), .groups = "drop") %>%
-        filter(total_occ >= n) %>%
-        pull(sciname)
+      eligible_spp <- names(species_totals)[species_totals >= n]
+      if (length(eligible_spp) == 0) return(NULL)
       
-      if (length(species_names) == 0) return(NULL)
-      
-      # 3. Replicate 1000 times:
-      replicates <- map_dfr(1:replications, function(b) {
-      
-        # 4. For each species, subsample n occurrences
-        map_dfr(species_names, function(spp) {
-          
-          data_species <- data_mountain %>%
-            filter(sciname == spp)
-          
-          if (nrow(data_species) < n) return(NULL)
-          
-          slice_sample(data_species, n = n, replace = FALSE) %>%
-            summarise(
-              sciname = spp,
-              elev_range = quantile(elevation, 0.95, na.rm = TRUE) - quantile(elevation, 0.05, na.rm = TRUE),
-              maxelev = quantile(elevation, 0.95, na.rm = TRUE),
-              minelev = quantile(elevation, 0.05, na.rm = TRUE)
-            )
-        })
+      # Per-species: matrix-sample, vectorized 5-95 quantiles across all replicates
+      per_species <- map_dfr(eligible_spp, function(spp) {
+        
+        elev_vec <- species_split[[spp]]$elevation
+        n_total  <- length(elev_vec)
+        
+        idx_mat <- vapply(
+          seq_len(replications),
+          function(i) sample.int(n_total, n, replace = FALSE),
+          integer(n)
+        )
+        sample_mat <- matrix(elev_vec[idx_mat], nrow = n)
+        
+        lo <- matrixStats::colQuantiles(sample_mat, probs = 0.05, na.rm = TRUE)
+        hi <- matrixStats::colQuantiles(sample_mat, probs = 0.95, na.rm = TRUE)
+        
+        tibble(
+          sciname = spp,
+          elev_range = hi - lo,
+          maxelev = hi,
+          minelev = lo
+        )
       })
       
-      if (nrow(replicates) == 0) return(NULL)
+      # Number of distinct species selected at least once across the 1000 replicates
+      # (i.e. species with at least one successful replicate at this n)
+      n_sp <- length(eligible_spp)
       
-      n_sp <- n_distinct(replicates$sciname)
-      
-      replicates %>%
+      per_species %>%
         group_by(sciname) %>%
         summarise(
           Mountain_range = mountain,
@@ -83,8 +83,7 @@ rarefaction.Ntot <- function(data, replications, n_occ) {
   
   message("---- Start running the bootstrap! ----")
   
-  # Filter mountains with enough occurrences
-  mountain_names <- data %>% 
+  mountain_names <- data %>%
     group_by(Mountain_range) %>%
     summarise(total_occ = n(), .groups = "drop") %>%
     filter(total_occ > n_occ) %>%
@@ -92,43 +91,39 @@ rarefaction.Ntot <- function(data, replications, n_occ) {
   
   results <- furrr::future_map_dfr(mountain_names, function(mountain) {
     
-    data_mountain <- data %>%
-      filter(Mountain_range == mountain)
-    
+    data_mountain <- data %>% filter(Mountain_range == mountain)
     if (nrow(data_mountain) == 0) return(NULL)
     
     occ_total <- nrow(data_mountain)
-  
+    elev_vec  <- data_mountain$elevation
+    spp_vec   <- data_mountain$sciname
+    
     occ_seq <- unique(c(
       if (occ_total >= 100)  seq(100,  min(1000, occ_total), by = 100),
       if (occ_total >= 1250) seq(1250, min(3000, occ_total), by = 250),
       if (occ_total >= 3500) seq(3500, min(5000, occ_total), by = 500),
       if (occ_total >= 6000) seq(6000, occ_total,            by = 1000)
     ))
-    
     if (length(occ_seq) == 0) return(NULL)
     
-    # 2. For each subsampling level:
     map_dfr(occ_seq, function(n) {
       
       if (occ_total < n) return(NULL)
       
-      # 3. Replicate `replications` times:
-      replicates <- map_dfr(1:replications, function(b) {
+      # One replicate = draw n row-indices from the mountain pool, then
+      # compute per-species quantiles within that draw via data.table.
+      replicates <- map_dfr(seq_len(replications), function(b) {
         
-        # Subsample n occurrences from the resampled pool
-        sample_data <- slice_sample(data_mountain, n = n, replace = FALSE)
+        idx <- sample.int(occ_total, n, replace = FALSE)
         
-        # Calculate per-species range
-        sample_data %>%
-          group_by(sciname) %>%
-          summarise(
-            elev_range = quantile(elevation, 0.95, na.rm = TRUE) - quantile(elevation, 0.05, na.rm = TRUE),
-            maxelev = quantile(elevation, 0.95, na.rm = TRUE),
-            minelev = quantile(elevation, 0.05, na.rm = TRUE),
-            n_occ_species = n(),
-            .groups = "drop"
-          )
+        dt <- data.table::data.table(sciname = spp_vec[idx], elevation = elev_vec[idx])
+        
+        dt[, .(
+          elev_range    = quantile(elevation, 0.95, na.rm = TRUE) - quantile(elevation, 0.05, na.rm = TRUE),
+          maxelev       = quantile(elevation, 0.95, na.rm = TRUE),
+          minelev       = quantile(elevation, 0.05, na.rm = TRUE),
+          n_occ_species = .N
+        ), by = sciname]
       })
       
       if (nrow(replicates) == 0) return(NULL)
