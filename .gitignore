@@ -1,0 +1,22 @@
+.Rproj.user
+.Rhistory
+.RData
+.Ruserdata
+
+# Ignore file types
+GMBA_mountains/GMBA_Inventory_v2.0_broad_300/
+*.pdf
+*.docx
+*.xlsx
+*.CPG
+*.dbf
+*.prj
+*.sbn
+*.sbx
+*.shp
+*.shx
+
+# Ignore everything in Raw_datasets folder
+Raw_datasets/
+Files modified/
+.positai
