@@ -133,107 +133,113 @@
 
   <script>
 const SUPABASE_URL = "https://xwvzlscjqcegzyrpxqby.supabase.co";
-
 const SUPABASE_ANON_KEY =
 "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Inh3dnpsc2NqcWNlZ3p5cnB4cWJ5Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODkzOTEyNTIsImV4cCI6MjEwNDk2NzI1Mn0.3-nYI2QDIfX4VS6JxUR7I1WmCbE7Wmi9klOwJ1Jn1sA";
 
 const { createClient } = supabase;
-const client = createClient(
-  SUPABASE_URL,
-  SUPABASE_ANON_KEY
-);
+const client = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 
 const statusEl = document.getElementById("status");
-const authMessage = document.getElementById("authMessage");
-const loginBtn = document.getElementById("loginBtn");
-const logoutBtn = document.getElementById("logoutBtn");
+const authStatusEl = document.getElementById("auth-status");
+const registerBox = document.getElementById("register-box");
+const loginBox = document.getElementById("login-box");
+const userBox = document.getElementById("user-box");
+const welcomeUser = document.getElementById("welcome-user");
 
 async function testConnection() {
   try {
     const { error } = await client.auth.getSession();
-
     if (error) throw error;
-
-    statusEl.textContent =
-      "✅ Connected to Supabase successfully.";
-
+    statusEl.textContent = "✅ Connected to Supabase successfully.";
     statusEl.className = "ok";
   } catch (err) {
-
-    statusEl.textContent =
-      "❌ Connection failed: " + err.message;
-
+    statusEl.textContent = "❌ Connection failed: " + err.message;
     statusEl.className = "fail";
   }
 }
 
-async function sendMagicLink() {
+// Creates the login account AND the profile row (name + institution) in one step
+async function register() {
+  const name = document.getElementById("reg-name").value;
+  const institution = document.getElementById("reg-inst").value;
+  const email = document.getElementById("reg-email").value;
+  const password = document.getElementById("reg-password").value;
 
-  const email =
-    document.getElementById("email").value;
-
-  if (!email) {
-    authMessage.textContent =
-      "Please enter an email address.";
+  if (!name || !institution || !email || !password) {
+    authStatusEl.textContent = "Please fill in all fields.";
     return;
   }
 
-  const { error } =
-    await client.auth.signInWithOtp({
-      email
-    });
-
+  // Step 1: create the login account
+  const { data, error } = await client.auth.signUp({ email, password });
   if (error) {
-
-    authMessage.textContent =
-      error.message;
-
-  } else {
-
-    authMessage.textContent =
-      "✅ Email sent. Check your inbox.";
-
+    authStatusEl.textContent = "❌ " + error.message;
+    return;
   }
+
+  // Step 2: create the matching profile row with name + institution.
+  // data.user exists immediately if email confirmation is turned off (see instructions above).
+  if (data.user) {
+    const { error: profileError } = await client
+      .from("profiles")
+      .insert({ id: data.user.id, name, institution });
+
+    if (profileError) {
+      authStatusEl.textContent = "Account created, but profile save failed: " + profileError.message;
+      return;
+    }
+  }
+
+  authStatusEl.textContent = "✅ Account created! You're logged in.";
+  await refreshAuthUI();
 }
 
-async function checkUser() {
+async function login() {
+  const email = document.getElementById("login-email").value;
+  const password = document.getElementById("login-password").value;
 
-  const {
-    data: { session }
-  } = await client.auth.getSession();
-
-  if (session) {
-
-    loginBtn.style.display = "none";
-    logoutBtn.style.display = "inline-block";
-
-    authMessage.textContent =
-      "Logged in as " +
-      session.user.email;
-
+  const { error } = await client.auth.signInWithPassword({ email, password });
+  if (error) {
+    authStatusEl.textContent = "❌ " + error.message;
+    return;
   }
+  authStatusEl.textContent = "";
+  await refreshAuthUI();
 }
 
 async function logout() {
-
   await client.auth.signOut();
-
-  location.reload();
-
+  await refreshAuthUI();
 }
 
-loginBtn.addEventListener(
-  "click",
-  sendMagicLink
-);
+// Shows either the register/login forms, or the "Welcome, X" box, depending on login state
+async function refreshAuthUI() {
+  const { data: { session } } = await client.auth.getSession();
 
-logoutBtn.addEventListener(
-  "click",
-  logout
-);
+  if (session) {
+    registerBox.style.display = "none";
+    loginBox.style.display = "none";
+    userBox.style.display = "block";
+
+    const { data: profile } = await client
+      .from("profiles")
+      .select("name, institution")
+      .eq("id", session.user.id)
+      .single();
+
+    welcomeUser.textContent = profile
+      ? `Welcome, ${profile.name} (${profile.institution})`
+      : `Welcome, ${session.user.email}`;
+  } else {
+    registerBox.style.display = "block";
+    loginBox.style.display = "block";
+    userBox.style.display = "none";
+  }
+}
 
 testConnection();
-checkUser();
+refreshAuthUI();
 </script>
+
 </body>
 </html>
