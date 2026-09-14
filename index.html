@@ -12,6 +12,16 @@
     .fail { background: #fddede; color: #7f1d1d; }
     #map { height: 500px; margin-top: 20px; border: 1px solid #ccc; border-radius: 6px; }
     #selection { padding: 12px; margin-top: 12px; background: #eef2ff; border-radius: 6px; display: none; }
+    #taxon-icons { margin-top: 16px; display: none; gap: 16px; }
+    #taxon-icons button {
+      display: flex; flex-direction: column; align-items: center; gap: 6px;
+      padding: 16px; font-size: 14px; cursor: pointer;
+      border: 1px solid #ccc; border-radius: 8px; background: white;
+      width: 100px;
+    }
+    #taxon-icons button:hover { background: #f3f4f6; border-color: #2563eb; }
+    #taxon-icons span.icon { font-size: 32px; }
+    #download-status { margin-top: 10px; font-size: 14px; }
   </style>
 </head>
 <body>
@@ -70,6 +80,15 @@
   <p>Click a mountain range on the map to select it.</p>
   <div id="map"></div>
   <div id="selection"></div>
+
+  <div id="taxon-icons">
+    <button onclick="downloadChecklist('mammals')"><span class="icon">🦌</span>Mammals</button>
+    <button onclick="downloadChecklist('birds')"><span class="icon">🐦</span>Birds</button>
+    <button onclick="downloadChecklist('amphibians')"><span class="icon">🐸</span>Amphibians</button>
+    <button onclick="downloadChecklist('reptiles')"><span class="icon">🦎</span>Reptiles</button>
+  </div>
+  <div id="download-status"></div>
+
   <div id="status">Checking connection...</div>
 
   <!-- This loads the Supabase JavaScript library from a CDN, so we don't need to install anything -->
@@ -90,6 +109,8 @@
 
     let selectedMountain = null; // will hold { id, name } once the expert clicks one
     const selectionEl = document.getElementById('selection');
+    const taxonIconsEl = document.getElementById('taxon-icons');
+    const downloadStatusEl = document.getElementById('download-status');
 
     // Style for mountain polygons, and a highlighted style for the clicked one
     const defaultStyle = { color: '#2563eb', weight: 1, fillOpacity: 0.15 };
@@ -111,6 +132,39 @@
 
       selectionEl.style.display = 'block';
       selectionEl.textContent = `Selected: ${selectedMountain.name} (ID ${selectedMountain.id})`;
+
+      // Now that a mountain is picked, reveal the taxon icons
+      taxonIconsEl.style.display = 'flex';
+      downloadStatusEl.textContent = '';
+    }
+
+    // Builds the public storage URL for a given mountain + taxon, and triggers a download.
+    // Files are expected at: checklists/{mountain_id}/{taxon}.xlsx in the Supabase "checklists" bucket.
+    async function downloadChecklist(taxon) {
+      if (!selectedMountain) {
+        downloadStatusEl.textContent = 'Please select a mountain range first.';
+        return;
+      }
+
+      const filePath = `${selectedMountain.id}/${taxon}.xlsx`;
+      const { data } = client.storage.from('checklists').getPublicUrl(filePath);
+      const publicUrl = data.publicUrl;
+
+      // Check the file actually exists before sending the browser there —
+      // otherwise a missing file just shows a confusing blank/error page.
+      try {
+        const head = await fetch(publicUrl, { method: 'HEAD' });
+        if (!head.ok) {
+          downloadStatusEl.textContent =
+            `No ${taxon} checklist has been uploaded yet for ${selectedMountain.name}.`;
+          return;
+        }
+        // Force a download rather than navigating to the file
+        window.location.href = publicUrl + '?download';
+        downloadStatusEl.textContent = `Downloading ${taxon} checklist for ${selectedMountain.name}...`;
+      } catch (err) {
+        downloadStatusEl.textContent = 'Download failed: ' + err.message;
+      }
     }
 
     // Load the mountain boundaries file and add it to the map
