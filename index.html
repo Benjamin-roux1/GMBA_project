@@ -4,20 +4,81 @@
   <meta charset="UTF-8">
   <title>GMBA Expert Platform</title>
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" crossorigin="anonymous" />
   <style>
-    body { font-family: sans-serif; max-width: 600px; margin: 60px auto; padding: 0 20px; }
+    body { font-family: sans-serif; max-width: 900px; margin: 40px auto; padding: 0 20px; }
     #status { padding: 12px; border-radius: 6px; margin-top: 20px; }
     .ok { background: #d4f7d4; color: #14532d; }
     .fail { background: #fddede; color: #7f1d1d; }
+    #map { height: 500px; margin-top: 20px; border: 1px solid #ccc; border-radius: 6px; }
+    #selection { padding: 12px; margin-top: 12px; background: #eef2ff; border-radius: 6px; display: none; }
   </style>
 </head>
 <body>
   <h1>GMBA Expert Platform</h1>
-  <p>This is the skeleton page. If the box below turns green, your website is successfully talking to Supabase.</p>
+  <p>Click a mountain range on the map to select it.</p>
+  <div id="map"></div>
+  <div id="selection"></div>
   <div id="status">Checking connection...</div>
 
   <!-- This loads the Supabase JavaScript library from a CDN, so we don't need to install anything -->
-  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2" crossorigin="anonymous"></script>
+  <!-- Leaflet: the mapping library -->
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" crossorigin="anonymous"></script>
+
+  <script>
+    // ---- MAP SETUP ----
+    // Create the map, centered roughly on the world, zoomed out
+    const map = L.map('map').setView([20, 0], 2);
+
+    // Add the base map tiles (the actual world imagery/background)
+    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+      attribution: '&copy; OpenStreetMap contributors',
+      maxZoom: 12
+    }).addTo(map);
+
+    let selectedMountain = null; // will hold { id, name } once the expert clicks one
+    const selectionEl = document.getElementById('selection');
+
+    // Style for mountain polygons, and a highlighted style for the clicked one
+    const defaultStyle = { color: '#2563eb', weight: 1, fillOpacity: 0.15 };
+    const selectedStyle = { color: '#dc2626', weight: 2, fillOpacity: 0.4 };
+
+    let geojsonLayer = null;
+
+    function onMountainClick(e) {
+      const feature = e.target.feature;
+
+      // Reset all polygons to default style, then highlight only the clicked one
+      geojsonLayer.setStyle(defaultStyle);
+      e.target.setStyle(selectedStyle);
+
+      selectedMountain = {
+        id: feature.properties.GMBA_V2_ID,
+        name: feature.properties.MapName
+      };
+
+      selectionEl.style.display = 'block';
+      selectionEl.textContent = `Selected: ${selectedMountain.name} (ID ${selectedMountain.id})`;
+    }
+
+    // Load the mountain boundaries file and add it to the map
+    fetch('gmba_mountains.geojson')
+      .then(res => res.json())
+      .then(data => {
+        geojsonLayer = L.geoJSON(data, {
+          style: defaultStyle,
+          onEachFeature: (feature, layer) => {
+            layer.on('click', onMountainClick);
+          }
+        }).addTo(map);
+      })
+      .catch(err => {
+        selectionEl.style.display = 'block';
+        selectionEl.textContent = '⚠️ Could not load mountain boundaries: ' + err.message;
+      });
+    // ---- END MAP SETUP ----
+  </script>
 
   <script>
     // ---- FILL THESE IN with the two values from Supabase (Project Settings > API) ----
