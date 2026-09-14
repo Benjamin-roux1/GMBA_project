@@ -101,31 +101,108 @@
   </script>
 
   <script>
-    // ---- FILL THESE IN with the two values from Supabase (Project Settings > API) ----
-    const SUPABASE_URL = "https://xwvzlscjqcegzyrpxqby.supabase.co";
-    const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Inh3dnpsc2NqcWNlZ3p5cnB4cWJ5Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODkzOTEyNTIsImV4cCI6MjEwNDk2NzI1Mn0.3-nYI2QDIfX4VS6JxUR7I1WmCbE7Wmi9klOwJ1Jn1sA";
-    // -----------------------------------------------------------------------------------
+const SUPABASE_URL = "https://xwvzlscjqcegzyrpxqby.supabase.co";
 
-    const { createClient } = supabase;
-    const client = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+const SUPABASE_ANON_KEY =
+"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Inh3dnpsc2NqcWNlZ3p5cnB4cWJ5Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODkzOTEyNTIsImV4cCI6MjEwNDk2NzI1Mn0.3-nYI2QDIfX4VS6JxUR7I1WmCbE7Wmi9klOwJ1Jn1sA";
 
-    const statusEl = document.getElementById("status");
+const { createClient } = supabase;
+const client = createClient(
+  SUPABASE_URL,
+  SUPABASE_ANON_KEY
+);
 
-    async function testConnection() {
-      try {
-        // This call doesn't require any setup on your end yet — it just proves
-        // the URL and key are valid and the library can reach your Supabase project.
-        const { data, error } = await client.auth.getSession();
-        if (error) throw error;
-        statusEl.textContent = "✅ Connected to Supabase successfully.";
-        statusEl.className = "ok";
-      } catch (err) {
-        statusEl.textContent = "❌ Connection failed: " + err.message;
-        statusEl.className = "fail";
-      }
-    }
+const statusEl = document.getElementById("status");
+const authMessage = document.getElementById("authMessage");
+const loginBtn = document.getElementById("loginBtn");
+const logoutBtn = document.getElementById("logoutBtn");
 
-    testConnection();
-  </script>
+async function testConnection() {
+  try {
+    const { error } = await client.auth.getSession();
+
+    if (error) throw error;
+
+    statusEl.textContent =
+      "✅ Connected to Supabase successfully.";
+
+    statusEl.className = "ok";
+  } catch (err) {
+
+    statusEl.textContent =
+      "❌ Connection failed: " + err.message;
+
+    statusEl.className = "fail";
+  }
+}
+
+async function sendMagicLink() {
+
+  const email =
+    document.getElementById("email").value;
+
+  if (!email) {
+    authMessage.textContent =
+      "Please enter an email address.";
+    return;
+  }
+
+  const { error } =
+    await client.auth.signInWithOtp({
+      email
+    });
+
+  if (error) {
+
+    authMessage.textContent =
+      error.message;
+
+  } else {
+
+    authMessage.textContent =
+      "✅ Email sent. Check your inbox.";
+
+  }
+}
+
+async function checkUser() {
+
+  const {
+    data: { session }
+  } = await client.auth.getSession();
+
+  if (session) {
+
+    loginBtn.style.display = "none";
+    logoutBtn.style.display = "inline-block";
+
+    authMessage.textContent =
+      "Logged in as " +
+      session.user.email;
+
+  }
+}
+
+async function logout() {
+
+  await client.auth.signOut();
+
+  location.reload();
+
+}
+
+loginBtn.addEventListener(
+  "click",
+  sendMagicLink
+);
+
+logoutBtn.addEventListener(
+  "click",
+  logout
+);
+
+testConnection();
+checkUser();
+</script>
 </body>
 </html>
