@@ -102,6 +102,8 @@
   <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2" crossorigin="anonymous"></script>
   <!-- Leaflet: the mapping library -->
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" crossorigin="anonymous"></script>
+  <!-- SheetJS: reads Excel file contents directly in the browser, so we can pull the hidden ID sheet -->
+  <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js" crossorigin="anonymous"></script>
 
   <script>
     // ---- MAP SETUP ----
@@ -282,16 +284,46 @@ async function logout() {
   await refreshAuthUI();
 }
 
+// Reads the file's own embedded "_meta" sheet, if present, and returns
+// { mountain_id, taxon, mountain_name } — or null if the sheet isn't found
+// (e.g. an old template, or the file was re-saved as CSV and lost it).
+async function extractMetadataFromFile(file) {
+  try {
+    const buffer = await file.arrayBuffer();
+    const workbook = XLSX.read(buffer, { type: 'array' });
+
+    if (!workbook.SheetNames.includes('_meta')) {
+      return null;
+    }
+
+    const sheet = workbook.Sheets['_meta'];
+    // Sheet is stored as rows of [key, value] pairs, no header
+    const rows = XLSX.utils.sheet_to_json(sheet, { header: 1 });
+
+    const meta = {};
+    rows.forEach(row => {
+      if (row.length >= 2) meta[row[0]] = row[1];
+    });
+
+    if (!meta.mountain_id || !meta.taxon) return null;
+
+    return {
+      mountain_id: meta.mountain_id,
+      taxon: meta.taxon,
+      mountain_name: meta.mountain_name || null
+    };
+  } catch (err) {
+    // Not a readable Excel file, or something unexpected in its structure
+    return null;
+  }
+}
+
 // Uploads the expert's filled-in checklist to the private "submissions" bucket,
 // automatically placed under {mountain_id}/{taxon}/ — the expert never sees or edits this path.
 async function uploadChecklist() {
   const { data: { session } } = await client.auth.getSession();
   if (!session) {
     uploadStatusEl.textContent = 'Please log in before uploading.';
-    return;
-  }
-  if (!selectedMountain || !selectedTaxon) {
-    uploadStatusEl.textContent = 'Please select a mountain and taxon first.';
     return;
   }
 
@@ -302,10 +334,37 @@ async function uploadChecklist() {
     return;
   }
 
-  const timestamp = Date.now();
-  const storagePath = `${selectedMountain.id}/${selectedTaxon}/${session.user.id}_${timestamp}_${file.name}`;
+  uploadStatusEl.textContent = 'Reading file...';
 
-  uploadStatusEl.textContent = 'Uploading...';
+  // Trust the file's own embedded ID first — this is what makes uploads work
+  // correctly even if the expert closes the site and comes back another day,
+  // or clicked a different mountain than the one the file was actually for.
+  const embeddedMeta = await extractMetadataFromFile(file);
+
+  let mountainId, taxon, mountainName;
+
+  if (embeddedMeta) {
+    mountainId = embeddedMeta.mountain_id;
+    taxon = embeddedMeta.taxon;
+    mountainName = embeddedMeta.mountain_name;
+    uploadStatusEl.textContent =
+      `Detected from file: ${taxon} checklist for ${mountainName || 'mountain ID ' + mountainId}.`;
+  } else if (selectedMountain && selectedTaxon) {
+    // Fallback: no embedded ID found, use whatever is currently selected on the page
+    mountainId = selectedMountain.id;
+    taxon = selectedTaxon;
+    mountainName = selectedMountain.name;
+    uploadStatusEl.textContent =
+      `Could not find an ID inside this file — using your current selection (${taxon}, ${mountainName}) instead. ` +
+      `If that's wrong, please re-select the correct mountain and taxon above.`;
+  } else {
+    uploadStatusEl.textContent =
+      'Could not identify this file, and no mountain/taxon is currently selected. Please select one above.';
+    return;
+  }
+
+  const timestamp = Date.now();
+  const storagePath = `${mountainId}/${taxon}/${session.user.id}_${timestamp}_${file.name}`;
 
   const { error: uploadError } = await client.storage
     .from('submissions')
@@ -316,12 +375,11 @@ async function uploadChecklist() {
     return;
   }
 
-  // Record the submission so it's easy to query "who submitted what" later
   const { error: dbError } = await client.from('submissions').insert({
     user_id: session.user.id,
-    mountain_id: selectedMountain.id,
-    mountain_name: selectedMountain.name,
-    taxon: selectedTaxon,
+    mountain_id: mountainId,
+    mountain_name: mountainName,
+    taxon: taxon,
     file_path: storagePath
   });
 
@@ -330,7 +388,7 @@ async function uploadChecklist() {
     return;
   }
 
-  uploadStatusEl.textContent = '✅ Checklist uploaded successfully. Thank you!';
+  uploadStatusEl.textContent = `✅ Checklist uploaded successfully (${taxon}, ${mountainName || mountainId}). Thank you!`;
   fileInput.value = '';
 }
 
