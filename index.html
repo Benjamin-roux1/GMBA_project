@@ -89,6 +89,13 @@
   </div>
   <div id="download-status"></div>
 
+  <div id="upload-panel" style="display:none; margin-top:20px; padding:16px; border:1px solid #ccc; border-radius:8px;">
+    <h3 id="upload-title"></h3>
+    <input type="file" id="upload-file-input">
+    <button onclick="uploadChecklist()">Upload completed checklist</button>
+    <p id="upload-status"></p>
+  </div>
+
   <div id="status">Checking connection...</div>
 
   <!-- This loads the Supabase JavaScript library from a CDN, so we don't need to install anything -->
@@ -108,9 +115,13 @@
     }).addTo(map);
 
     let selectedMountain = null; // will hold { id, name } once the expert clicks one
+    let selectedTaxon = null; // will hold 'mammals' / 'birds' / 'amphibians' / 'reptiles'
     const selectionEl = document.getElementById('selection');
     const taxonIconsEl = document.getElementById('taxon-icons');
     const downloadStatusEl = document.getElementById('download-status');
+    const uploadPanelEl = document.getElementById('upload-panel');
+    const uploadTitleEl = document.getElementById('upload-title');
+    const uploadStatusEl = document.getElementById('upload-status');
 
     // Style for mountain polygons, and a highlighted style for the clicked one
     const defaultStyle = { color: '#2563eb', weight: 1, fillOpacity: 0.15 };
@@ -145,6 +156,11 @@
         downloadStatusEl.textContent = 'Please select a mountain range first.';
         return;
       }
+
+      selectedTaxon = taxon;
+      uploadPanelEl.style.display = 'block';
+      uploadTitleEl.textContent = `Upload completed ${taxon} checklist for ${selectedMountain.name}`;
+      uploadStatusEl.textContent = '';
 
       const filePath = `${selectedMountain.id}/${taxon}.xlsx`;
       const { data } = client.storage.from('checklists').getPublicUrl(filePath);
@@ -264,6 +280,58 @@ async function login() {
 async function logout() {
   await client.auth.signOut();
   await refreshAuthUI();
+}
+
+// Uploads the expert's filled-in checklist to the private "submissions" bucket,
+// automatically placed under {mountain_id}/{taxon}/ — the expert never sees or edits this path.
+async function uploadChecklist() {
+  const { data: { session } } = await client.auth.getSession();
+  if (!session) {
+    uploadStatusEl.textContent = 'Please log in before uploading.';
+    return;
+  }
+  if (!selectedMountain || !selectedTaxon) {
+    uploadStatusEl.textContent = 'Please select a mountain and taxon first.';
+    return;
+  }
+
+  const fileInput = document.getElementById('upload-file-input');
+  const file = fileInput.files[0];
+  if (!file) {
+    uploadStatusEl.textContent = 'Please choose a file to upload.';
+    return;
+  }
+
+  const timestamp = Date.now();
+  const storagePath = `${selectedMountain.id}/${selectedTaxon}/${session.user.id}_${timestamp}_${file.name}`;
+
+  uploadStatusEl.textContent = 'Uploading...';
+
+  const { error: uploadError } = await client.storage
+    .from('submissions')
+    .upload(storagePath, file);
+
+  if (uploadError) {
+    uploadStatusEl.textContent = '❌ Upload failed: ' + uploadError.message;
+    return;
+  }
+
+  // Record the submission so it's easy to query "who submitted what" later
+  const { error: dbError } = await client.from('submissions').insert({
+    user_id: session.user.id,
+    mountain_id: selectedMountain.id,
+    mountain_name: selectedMountain.name,
+    taxon: selectedTaxon,
+    file_path: storagePath
+  });
+
+  if (dbError) {
+    uploadStatusEl.textContent = '⚠️ File uploaded, but the record could not be saved: ' + dbError.message;
+    return;
+  }
+
+  uploadStatusEl.textContent = '✅ Checklist uploaded successfully. Thank you!';
+  fileInput.value = '';
 }
 
 // Shows either the register/login forms, or the "Welcome, X" box, depending on login state
