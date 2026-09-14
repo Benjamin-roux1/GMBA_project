@@ -16,6 +16,26 @@
 </head>
 <body>
   <h1>GMBA Expert Platform</h1>
+  <div id="authBox" style="padding:15px;border:1px solid #ccc;border-radius:6px;margin-bottom:20px;">
+  <h3>Expert Login</h3>
+
+  <input
+    type="email"
+    id="email"
+    placeholder="Your email"
+    style="padding:8px;width:300px;"
+  >
+
+  <button id="loginBtn">
+    Send Login Link
+  </button>
+
+  <button id="logoutBtn" style="display:none;">
+    Logout
+  </button>
+
+  <p id="authMessage"></p>
+</div>
   <p>Click a mountain range on the map to select it.</p>
   <div id="map"></div>
   <div id="selection"></div>
