@@ -90,7 +90,8 @@
   <div id="download-status"></div>
 
   <div id="upload-panel" style="display:none; margin-top:20px; padding:16px; border:1px solid #ccc; border-radius:8px;">
-    <h3 id="upload-title"></h3>
+    <h3 id="upload-title">Upload a completed checklist</h3>
+    <p style="font-size:13px; color:#555;">The file's embedded ID determines where it's filed — you don't need to click a mountain first unless you also want to download a fresh template.</p>
     <input type="file" id="upload-file-input">
     <button onclick="uploadChecklist()">Upload completed checklist</button>
     <p id="upload-status"></p>
@@ -217,6 +218,7 @@ const registerBox = document.getElementById("register-box");
 const loginBox = document.getElementById("login-box");
 const userBox = document.getElementById("user-box");
 const welcomeUser = document.getElementById("welcome-user");
+const uploadPanelAuthRef = document.getElementById("upload-panel");
 
 async function testConnection() {
   try {
@@ -400,6 +402,7 @@ async function refreshAuthUI() {
     registerBox.style.display = "none";
     loginBox.style.display = "none";
     userBox.style.display = "block";
+    uploadPanelAuthRef.style.display = "block";
 
     const { data: profile } = await client
       .from("profiles")
@@ -414,6 +417,7 @@ async function refreshAuthUI() {
     registerBox.style.display = "block";
     loginBox.style.display = "block";
     userBox.style.display = "none";
+    uploadPanelAuthRef.style.display = "none";
   }
 }
 
