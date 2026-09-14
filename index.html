@@ -16,25 +16,56 @@
 </head>
 <body>
   <h1>GMBA Expert Platform</h1>
-  <div id="authBox" style="padding:15px;border:1px solid #ccc;border-radius:6px;margin-bottom:20px;">
-  <h3>Expert Login</h3>
+ <div id="auth-container">
 
-  <input
-    type="email"
-    id="email"
-    placeholder="Your email"
-    style="padding:8px;width:300px;"
-  >
+  <div id="register-box">
+    <h3>Create Account</h3>
 
-  <button id="loginBtn">
-    Send Login Link
-  </button>
+    <input id="reg-name" placeholder="Full name">
+    <br><br>
 
-  <button id="logoutBtn" style="display:none;">
-    Logout
-  </button>
+    <input id="reg-inst" placeholder="Institution">
+    <br><br>
 
-  <p id="authMessage"></p>
+    <input id="reg-email" type="email" placeholder="Email">
+    <br><br>
+
+    <input id="reg-password" type="password" placeholder="Password">
+    <br><br>
+
+    <button onclick="register()">
+      Create Account
+    </button>
+  </div>
+
+  <hr>
+
+  <div id="login-box">
+    <h3>Login</h3>
+
+    <input id="login-email" type="email" placeholder="Email">
+    <br><br>
+
+    <input id="login-password" type="password" placeholder="Password">
+    <br><br>
+
+    <button onclick="login()">
+      Login
+    </button>
+  </div>
+
+  <hr>
+
+  <div id="user-box" style="display:none;">
+    <span id="welcome-user"></span>
+
+    <button onclick="logout()">
+      Logout
+    </button>
+  </div>
+
+  <p id="auth-status"></p>
+
 </div>
   <p>Click a mountain range on the map to select it.</p>
   <div id="map"></div>
