@@ -1,0 +1,50 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>GMBA Expert Platform</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <style>
+    body { font-family: sans-serif; max-width: 600px; margin: 60px auto; padding: 0 20px; }
+    #status { padding: 12px; border-radius: 6px; margin-top: 20px; }
+    .ok { background: #d4f7d4; color: #14532d; }
+    .fail { background: #fddede; color: #7f1d1d; }
+  </style>
+</head>
+<body>
+  <h1>GMBA Expert Platform</h1>
+  <p>This is the skeleton page. If the box below turns green, your website is successfully talking to Supabase.</p>
+  <div id="status">Checking connection...</div>
+
+  <!-- This loads the Supabase JavaScript library from a CDN, so we don't need to install anything -->
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+
+  <script>
+    // ---- FILL THESE IN with the two values from Supabase (Project Settings > API) ----
+    const SUPABASE_URL = "PASTE_YOUR_PROJECT_URL_HERE";
+    const SUPABASE_ANON_KEY = "PASTE_YOUR_ANON_KEY_HERE";
+    // -----------------------------------------------------------------------------------
+
+    const { createClient } = supabase;
+    const client = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+
+    const statusEl = document.getElementById("status");
+
+    async function testConnection() {
+      try {
+        // This call doesn't require any setup on your end yet — it just proves
+        // the URL and key are valid and the library can reach your Supabase project.
+        const { data, error } = await client.auth.getSession();
+        if (error) throw error;
+        statusEl.textContent = "✅ Connected to Supabase successfully.";
+        statusEl.className = "ok";
+      } catch (err) {
+        statusEl.textContent = "❌ Connection failed: " + err.message;
+        statusEl.className = "fail";
+      }
+    }
+
+    testConnection();
+  </script>
+</body>
+</html>
