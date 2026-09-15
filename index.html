@@ -145,18 +145,42 @@
     const uploadTitleEl = document.getElementById('upload-title');
     const uploadStatusEl = document.getElementById('upload-status');
 
-    // Style for mountain polygons, and a highlighted style for the clicked one
-    const defaultStyle = { color: '#2563eb', weight: 1, fillOpacity: 0.15 };
-    const selectedStyle = { color: '#dc2626', weight: 2, fillOpacity: 0.4 };
+    // Style for a selected mountain — a bold black outline over its own color, so
+    // you can still tell which one it is while clearly seeing it's selected
+    const selectedOverlayStyle = { weight: 3, color: '#111', fillOpacity: 0.6 };
+
+    // Assigns each mountain a distinct color spread around the color wheel.
+    // The "golden angle" (~137.5°) is used because repeatedly stepping by it
+    // gives well-spread, non-repeating colors even for a large number of items —
+    // far better than dividing 360° evenly, which can make similar-index
+    // neighbors look identical for certain counts.
+    function colorForIndex(index) {
+      const hue = (index * 137.508) % 360;
+      return `hsl(${hue}, 65%, 45%)`;
+    }
+
+    function styleForFeature(feature) {
+      return {
+        color: colorForIndex(feature.properties.__colorIndex),
+        weight: 1,
+        fillOpacity: 0.45
+      };
+    }
 
     let geojsonLayer = null;
+    let previousSelectedLayer = null;
 
     function onMountainClick(e) {
       const feature = e.target.feature;
 
-      // Reset all polygons to default style, then highlight only the clicked one
-      geojsonLayer.setStyle(defaultStyle);
-      e.target.setStyle(selectedStyle);
+      // Restore the previously selected mountain back to its own color (not a shared default)
+      if (previousSelectedLayer) {
+        previousSelectedLayer.setStyle(styleForFeature(previousSelectedLayer.feature));
+      }
+
+      // Highlight the newly clicked one with a bold outline, keeping its own color visible
+      e.target.setStyle(selectedOverlayStyle);
+      previousSelectedLayer = e.target;
 
       selectedMountain = {
         id: feature.properties.GMBA_V2_ID,
@@ -209,8 +233,11 @@
     fetch('gmba_mountains.geojson')
       .then(res => res.json())
       .then(data => {
+        // Tag each feature with a stable index (used to pick its color)
+        data.features.forEach((f, i) => { f.properties.__colorIndex = i; });
+
         geojsonLayer = L.geoJSON(data, {
-          style: defaultStyle,
+          style: styleForFeature,
           onEachFeature: (feature, layer) => {
             layer.on('click', onMountainClick);
           }
