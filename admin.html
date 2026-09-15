@@ -39,7 +39,8 @@
       <tr>
         <th data-key="mountain_name">Mountain</th>
         <th data-key="taxon">Taxon</th>
-        <th data-key="name">Expert</th>
+        <th data-key="first_name">First name</th>
+        <th data-key="surname">Surname</th>
         <th data-key="institution">Institution</th>
         <th data-key="email">Email</th>
         <th data-key="uploaded_at">Uploaded</th>
@@ -107,7 +108,7 @@
       // each submission together with the submitter's profile in one request.
       const { data, error } = await client
         .from('submissions')
-        .select('mountain_id, mountain_name, taxon, uploaded_at, file_path, profiles(name, institution, email)')
+        .select('mountain_id, mountain_name, taxon, uploaded_at, file_path, profiles(first_name, surname, institution, email)')
         .order('uploaded_at', { ascending: false });
 
       if (error) {
@@ -118,7 +119,8 @@
       allRows = data.map(row => ({
         mountain_name: row.mountain_name || row.mountain_id,
         taxon: row.taxon,
-        name: row.profiles?.name || '(unknown)',
+        first_name: row.profiles?.first_name || '(unknown)',
+        surname: row.profiles?.surname || '',
         institution: row.profiles?.institution || '',
         email: row.profiles?.email || '',
         uploaded_at: row.uploaded_at,
@@ -138,7 +140,8 @@
         tr.innerHTML = `
           <td>${escapeHtml(row.mountain_name)}</td>
           <td>${escapeHtml(row.taxon)}</td>
-          <td>${escapeHtml(row.name)}</td>
+          <td>${escapeHtml(row.first_name)}</td>
+          <td>${escapeHtml(row.surname)}</td>
           <td>${escapeHtml(row.institution)}</td>
           <td>${escapeHtml(row.email)}</td>
           <td>${new Date(row.uploaded_at).toLocaleString()}</td>

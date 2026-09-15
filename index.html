@@ -31,7 +31,10 @@
   <div id="register-box">
     <h3>Create Account</h3>
 
-    <input id="reg-name" placeholder="Full name">
+    <input id="reg-firstname" placeholder="First name">
+    <br><br>
+
+    <input id="reg-surname" placeholder="Surname">
     <br><br>
 
     <input id="reg-inst" placeholder="Institution">
@@ -69,9 +72,22 @@
   <div id="user-box" style="display:none;">
     <span id="welcome-user"></span>
 
+    <button onclick="toggleProfilePanel()">My Profile</button>
     <button onclick="logout()">
       Logout
     </button>
+
+    <div id="profile-panel" style="display:none; margin-top:12px; padding:16px; border:1px solid #ccc; border-radius:8px; max-width:320px;">
+      <h3>My Profile</h3>
+      <label>First name</label>
+      <input id="profile-firstname" style="display:block; margin-bottom:8px;">
+      <label>Surname</label>
+      <input id="profile-surname" style="display:block; margin-bottom:8px;">
+      <label>Institution</label>
+      <input id="profile-institution" style="display:block; margin-bottom:8px;">
+      <button onclick="saveProfile()">Save changes</button>
+      <p id="profile-status"></p>
+    </div>
   </div>
 
   <p id="auth-status"></p>
@@ -237,12 +253,13 @@ async function testConnection() {
 
 // Creates the login account AND the profile row (name + institution) in one step
 async function register() {
-  const name = document.getElementById("reg-name").value;
+  const first_name = document.getElementById("reg-firstname").value;
+  const surname = document.getElementById("reg-surname").value;
   const institution = document.getElementById("reg-inst").value;
   const email = document.getElementById("reg-email").value;
   const password = document.getElementById("reg-password").value;
 
-  if (!name || !institution || !email || !password) {
+  if (!first_name || !surname || !institution || !email || !password) {
     authStatusEl.textContent = "Please fill in all fields.";
     return;
   }
@@ -254,12 +271,12 @@ async function register() {
     return;
   }
 
-  // Step 2: create the matching profile row with name + institution.
+  // Step 2: create the matching profile row.
   // data.user exists immediately if email confirmation is turned off (see instructions above).
   if (data.user) {
     const { error: profileError } = await client
       .from("profiles")
-      .insert({ id: data.user.id, name, institution, email });
+      .insert({ id: data.user.id, first_name, surname, institution, email });
 
     if (profileError) {
       authStatusEl.textContent = "Account created, but profile save failed: " + profileError.message;
@@ -287,6 +304,56 @@ async function login() {
 async function logout() {
   await client.auth.signOut();
   await refreshAuthUI();
+}
+
+// Opens the profile panel and pre-fills it with the current values from the database
+async function toggleProfilePanel() {
+  const panel = document.getElementById('profile-panel');
+  const isHidden = panel.style.display === 'none';
+
+  if (isHidden) {
+    const { data: { session } } = await client.auth.getSession();
+    const { data: profile, error } = await client
+      .from('profiles')
+      .select('first_name, surname, institution')
+      .eq('id', session.user.id)
+      .single();
+
+    if (!error && profile) {
+      document.getElementById('profile-firstname').value = profile.first_name || '';
+      document.getElementById('profile-surname').value = profile.surname || '';
+      document.getElementById('profile-institution').value = profile.institution || '';
+    }
+  }
+
+  panel.style.display = isHidden ? 'block' : 'none';
+}
+
+// Saves edits back to the profiles table (allowed by the "update own profile" rule)
+async function saveProfile() {
+  const { data: { session } } = await client.auth.getSession();
+  const first_name = document.getElementById('profile-firstname').value;
+  const surname = document.getElementById('profile-surname').value;
+  const institution = document.getElementById('profile-institution').value;
+  const statusEl = document.getElementById('profile-status');
+
+  if (!first_name || !surname || !institution) {
+    statusEl.textContent = 'Please fill in all fields.';
+    return;
+  }
+
+  const { error } = await client
+    .from('profiles')
+    .update({ first_name, surname, institution })
+    .eq('id', session.user.id);
+
+  if (error) {
+    statusEl.textContent = '❌ ' + error.message;
+    return;
+  }
+
+  statusEl.textContent = '✅ Saved.';
+  await refreshAuthUI(); // updates the "Welcome, ..." text with the new name
 }
 
 // Reads the file's own embedded "_meta" sheet, if present, and returns
@@ -414,12 +481,12 @@ async function refreshAuthUI() {
 
     const { data: profile } = await client
       .from("profiles")
-      .select("name, institution")
+      .select("first_name, surname, institution")
       .eq("id", session.user.id)
       .single();
 
     welcomeUser.textContent = profile
-      ? `Welcome, ${profile.name} (${profile.institution})`
+      ? `Welcome, ${profile.first_name} ${profile.surname} (${profile.institution})`
       : `Welcome, ${session.user.email}`;
   } else {
     registerBox.style.display = "block";
