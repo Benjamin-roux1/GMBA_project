@@ -256,7 +256,7 @@ async function register() {
   if (data.user) {
     const { error: profileError } = await client
       .from("profiles")
-      .insert({ id: data.user.id, name, institution });
+      .insert({ id: data.user.id, name, institution, email });
 
     if (profileError) {
       authStatusEl.textContent = "Account created, but profile save failed: " + profileError.message;

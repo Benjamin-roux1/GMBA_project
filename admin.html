@@ -1,0 +1,209 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>GMBA Admin — Submissions Overview</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <style>
+    body { font-family: sans-serif; max-width: 1100px; margin: 40px auto; padding: 0 20px; }
+    table { border-collapse: collapse; width: 100%; margin-top: 20px; }
+    th, td { border: 1px solid #ddd; padding: 8px 12px; text-align: left; font-size: 14px; }
+    th { background: #f3f4f6; cursor: pointer; user-select: none; }
+    tr:nth-child(even) { background: #fafafa; }
+    #login-box input { margin: 4px 0; display: block; }
+    #status { margin-top: 12px; }
+    button.download-btn { font-size: 12px; padding: 4px 8px; cursor: pointer; }
+    #filters { margin-top: 16px; display: flex; gap: 12px; }
+    #filters input { padding: 6px; }
+  </style>
+</head>
+<body>
+  <h1>Submissions Overview</h1>
+
+  <div id="login-box">
+    <p>Log in with your admin account:</p>
+    <input id="login-email" type="email" placeholder="Email">
+    <input id="login-password" type="password" placeholder="Password">
+    <button onclick="login()">Login</button>
+  </div>
+
+  <div id="status"></div>
+
+  <div id="filters" style="display:none;">
+    <input id="filter-mountain" placeholder="Filter by mountain name...">
+    <input id="filter-taxon" placeholder="Filter by taxon...">
+  </div>
+
+  <table id="submissions-table" style="display:none;">
+    <thead>
+      <tr>
+        <th data-key="mountain_name">Mountain</th>
+        <th data-key="taxon">Taxon</th>
+        <th data-key="name">Expert</th>
+        <th data-key="institution">Institution</th>
+        <th data-key="email">Email</th>
+        <th data-key="uploaded_at">Uploaded</th>
+        <th>File</th>
+      </tr>
+    </thead>
+    <tbody id="submissions-body"></tbody>
+  </table>
+
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2" crossorigin="anonymous"></script>
+  <script>
+    const SUPABASE_URL = "https://xwvzlscjqcegzyrpxqby.supabase.co";
+    const SUPABASE_ANON_KEY =
+      "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Inh3dnpsc2NqcWNlZ3p5cnB4cWJ5Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODkzOTEyNTIsImV4cCI6MjEwNDk2NzI1Mn0.3-nYI2QDIfX4VS6JxUR7I1WmCbE7Wmi9klOwJ1Jn1sA";
+
+    const client = supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+
+    const statusEl = document.getElementById('status');
+    const loginBoxEl = document.getElementById('login-box');
+    const filtersEl = document.getElementById('filters');
+    const tableEl = document.getElementById('submissions-table');
+    const bodyEl = document.getElementById('submissions-body');
+
+    let allRows = [];
+
+    async function login() {
+      const email = document.getElementById('login-email').value;
+      const password = document.getElementById('login-password').value;
+
+      const { error } = await client.auth.signInWithPassword({ email, password });
+      if (error) {
+        statusEl.textContent = '❌ ' + error.message;
+        return;
+      }
+      await checkAdminAndLoad();
+    }
+
+    async function checkAdminAndLoad() {
+      const { data: { session } } = await client.auth.getSession();
+      if (!session) {
+        statusEl.textContent = '';
+        return; // stay on login screen
+      }
+
+      // Confirm this account is flagged as an admin before showing anything
+      const { data: profile, error: profileError } = await client
+        .from('profiles')
+        .select('is_admin')
+        .eq('id', session.user.id)
+        .single();
+
+      if (profileError || !profile || !profile.is_admin) {
+        statusEl.textContent = '🚫 This account does not have admin access.';
+        return;
+      }
+
+      loginBoxEl.style.display = 'none';
+      statusEl.textContent = 'Loading submissions...';
+
+      await loadSubmissions();
+    }
+
+    async function loadSubmissions() {
+      // Thanks to the FK from submissions.user_id -> profiles.id, we can pull
+      // each submission together with the submitter's profile in one request.
+      const { data, error } = await client
+        .from('submissions')
+        .select('mountain_id, mountain_name, taxon, uploaded_at, file_path, profiles(name, institution, email)')
+        .order('uploaded_at', { ascending: false });
+
+      if (error) {
+        statusEl.textContent = '❌ Could not load submissions: ' + error.message;
+        return;
+      }
+
+      allRows = data.map(row => ({
+        mountain_name: row.mountain_name || row.mountain_id,
+        taxon: row.taxon,
+        name: row.profiles?.name || '(unknown)',
+        institution: row.profiles?.institution || '',
+        email: row.profiles?.email || '',
+        uploaded_at: row.uploaded_at,
+        file_path: row.file_path
+      }));
+
+      statusEl.textContent = `${allRows.length} submission(s) found.`;
+      filtersEl.style.display = 'flex';
+      tableEl.style.display = 'table';
+      renderTable(allRows);
+    }
+
+    function renderTable(rows) {
+      bodyEl.innerHTML = '';
+      rows.forEach(row => {
+        const tr = document.createElement('tr');
+        tr.innerHTML = `
+          <td>${escapeHtml(row.mountain_name)}</td>
+          <td>${escapeHtml(row.taxon)}</td>
+          <td>${escapeHtml(row.name)}</td>
+          <td>${escapeHtml(row.institution)}</td>
+          <td>${escapeHtml(row.email)}</td>
+          <td>${new Date(row.uploaded_at).toLocaleString()}</td>
+          <td><button class="download-btn" data-path="${escapeHtml(row.file_path)}">Download</button></td>
+        `;
+        bodyEl.appendChild(tr);
+      });
+
+      // Wire up download buttons (created just above)
+      bodyEl.querySelectorAll('.download-btn').forEach(btn => {
+        btn.addEventListener('click', () => downloadFile(btn.dataset.path));
+      });
+    }
+
+    async function downloadFile(path) {
+      // Files live in a PRIVATE bucket, so we generate a short-lived signed URL
+      // rather than a permanent public link
+      const { data, error } = await client.storage
+        .from('submissions')
+        .createSignedUrl(path, 60); // valid for 60 seconds
+
+      if (error) {
+        alert('Could not generate download link: ' + error.message);
+        return;
+      }
+      window.open(data.signedUrl, '_blank');
+    }
+
+    function escapeHtml(str) {
+      const div = document.createElement('div');
+      div.textContent = str ?? '';
+      return div.innerHTML;
+    }
+
+    // Simple text filtering on mountain name / taxon
+    function applyFilters() {
+      const mountainQuery = document.getElementById('filter-mountain').value.toLowerCase();
+      const taxonQuery = document.getElementById('filter-taxon').value.toLowerCase();
+
+      const filtered = allRows.filter(row =>
+        String(row.mountain_name).toLowerCase().includes(mountainQuery) &&
+        String(row.taxon).toLowerCase().includes(taxonQuery)
+      );
+      renderTable(filtered);
+    }
+
+    document.getElementById('filter-mountain').addEventListener('input', applyFilters);
+    document.getElementById('filter-taxon').addEventListener('input', applyFilters);
+
+    // Sortable columns: click a header to sort by that field
+    document.querySelectorAll('th[data-key]').forEach(th => {
+      let ascending = true;
+      th.addEventListener('click', () => {
+        const key = th.dataset.key;
+        allRows.sort((a, b) => {
+          const valA = String(a[key] ?? '').toLowerCase();
+          const valB = String(b[key] ?? '').toLowerCase();
+          return ascending ? valA.localeCompare(valB) : valB.localeCompare(valA);
+        });
+        ascending = !ascending;
+        applyFilters();
+      });
+    });
+
+    checkAdminAndLoad();
+  </script>
+</body>
+</html>
